@@ -1769,7 +1769,11 @@
             document.getElementById('mainPage').classList.remove('hidden');
         }
         async function loadData() {
-            await Promise.all([loadStats(), loadAccounts(), loadSettings(), loadVersion(), loadClash()]);
+            // Clash status MUST be loaded before accounts, otherwise the
+            // proxy dropdowns render with an empty node list and every
+            // bound node looks like "(missing)" until the next interaction.
+            await loadClash();
+            await Promise.all([loadStats(), loadAccounts(), loadSettings(), loadVersion()]);
             document.getElementById('claudeEndpoint').textContent = baseUrl + '/v1/messages';
             document.getElementById('openaiEndpoint').textContent = baseUrl + '/v1/chat/completions';
             document.getElementById('modelsEndpoint').textContent = baseUrl + '/v1/models';
@@ -1834,6 +1838,7 @@
                     '<span>权重:</span>' +
                     '<input id="weight-' + a.id + '" type="number" value="' + (a.weight || 100) + '" min="1" max="10000" style="width:70px">' +
                     '<button class="btn btn-sm btn-secondary" onclick="saveWeight(\'' + a.id + '\')">保存</button>' +
+                    formatAccountSchedule(a) +
                     '</div>' +
                     '</div>';
             }).join('');
@@ -1915,6 +1920,24 @@
             if (diff < 3600) return Math.floor(diff / 60) + t('time.minutes');
             if (diff < 86400) return Math.floor(diff / 3600) + t('time.hours');
             return Math.floor(diff / 86400) + t('time.days');
+        }
+        // formatAccountSchedule renders the bottom-right slot of an account card.
+        // Priority: trial-expiry → quota-reset-date → subscription-days-remaining.
+        // Falls back to "" so the row collapses cleanly when nothing is known.
+        function formatAccountSchedule(a) {
+            const parts = [];
+            if (a.trialStatus === 'ACTIVE' && a.trialExpiresAt) {
+                const d = new Date(a.trialExpiresAt * 1000);
+                parts.push('🎁 ' + d.toLocaleDateString());
+            }
+            if (a.nextResetDate) {
+                parts.push('🔄 ' + a.nextResetDate);
+            }
+            if (a.daysRemaining && a.daysRemaining > 0 && a.subscriptionType && a.subscriptionType !== 'FREE') {
+                parts.push('⏳ ' + a.daysRemaining + 'd');
+            }
+            if (parts.length === 0) return '';
+            return '<span style="margin-left:auto;color:#475569">' + parts.join(' · ') + '</span>';
         }
         async function refreshAccount(id) {
             const card = event.target.closest('.account-card');

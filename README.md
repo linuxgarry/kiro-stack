@@ -1,12 +1,146 @@
-# Fork 修改说明 / Fork Changes
+# 🚀 kiro-stack (linuxgarry fork)
 
-本仓库 fork 自 **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**。下面按 **从新到旧** 的顺序列出本 fork 在上游基础上做的所有改动。
+本仓库 fork 自 **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**。在 `kiro-go` 模块上加了一套面向「机场订阅 + 多账号代理隔离」的实用功能。下面按 **从新到旧** 的顺序列出本 fork 在上游基础上做的所有改动。
 
-This repository is forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Changes below are listed **newest first**.
+Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Adds a set of practical features for "subscription-based proxies + per-account isolation" to the `kiro-go` module. Changes are listed **newest first**.
+
+### 📜 一句话改了什么 / TL;DR
+
+| 版本 | 重点 / Highlight |
+|------|------|
+| 🆕 **v2.3** | UI 缓存竞态修复 · 账号卡到期 / 重置日期 · ss/vmess 用法说明 |
+| **v2.2** | 跳板 +ss/+vmess · 跳板「测试」按钮 · 前端正则修复 |
+| **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
+| **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
+| **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🆕 v2.3 — 缓存竞态 + 到期日期 + ss/vmess 用法 / Cache race + expiry dates + ss/vmess docs
+
+### 修了什么 / Bug fixes
+
+- 🐛 **修：刷新浏览器后下拉里只剩「直连」+ (missing) 节点**
+  - **症状**：订阅 90 个节点正常加载到磁盘缓存（`data/clash-cache.yaml`），后端 `/admin/api/clash` 也返回 `loaded: 90`。但你按 F5 → 账号卡的代理下拉只剩"直连"和"(missing) 高级 专线 美国 03"。
+  - **根因**：前端 `loadData()` 把 `loadStats / loadAccounts / loadSettings / loadVersion / loadClash` 全塞进 `Promise.all`，竞态导致 `renderAccounts()` 先于 `loadClash()` 完成。`renderProxySelect()` 拿到的是空 `clashStatus.names`，所以下拉里只剩当前绑定那个并标 `(missing)`。
+  - **修法**：`loadData()` 现在先 `await loadClash()` 再并发载剩下的，渲染顺序 = Clash 节点列表 → 账号卡片。后端没动，0 风险。
+
+- 🐛 **Bug fix: dropdowns lost everything after F5 (only "Direct" + "(missing)" left)**
+  - The disk cache works fine and `/admin/api/clash` returns `loaded: 90`. The bug was a frontend race: `Promise.all([loadStats, loadAccounts, loadSettings, loadVersion, loadClash])` rendered account cards before `clashStatus.names` was populated. Fix: `await loadClash()` first, then parallel-load the rest.
+
+### 加了什么 / New
+
+- 📅 **账号卡右下角现在显示重要日期**：试用到期 🎁 / 配额重置日 🔄 / 订阅剩余天数 ⏳。优先级 trial → reset → days-remaining，没数据就让那块塌缩。
+
+- 📅 **Account cards now show important dates in the bottom-right corner**: trial expiry 🎁 / quota reset 🔄 / subscription days remaining ⏳. Falls back to nothing when the data isn't known.
+
+### 🌐 全局跳板用法 / Global Jump Usage
+
+⚠️ **重要：跳板的真实作用范围**
+
+跳板（Global Jump Host）当前生效于 **订阅 YAML 拉取** 这一条出站路径上。每账号绑定到 Clash 节点后，**节点本身的 dial 不经过跳板** —— 这条「先跳板 → 再节点 → 再目标」的链式 dial 还没实现（mihomo 的 `ProxyAdapter` 接口没有暴露干净的「上游 dialer」注入点；`proxydialer` 包能给一个 `C.Dialer`，但要喂回每个 `outbound` 的 `BasicOption.DialerForAPI` 字段，而我们并没有从 mihomo 完整的 `Tunnel` runtime 里拿到这些 `outbound` 对象）。
+
+如果你的 VPS 直连节点失败（DNS 污染、ISP 黑洞），目前的 workaround：
+1. 用 v1 的「账号代理」字段（账号详情弹窗里）给账号配一个能联通的 http/socks5 跳板
+2. 或者跑一个独立的 mihomo 容器，把节点都挂在它上面，账号代理填 `socks5://mihomo:7890`
+
+⚠️ **What the jump actually does**
+
+The global jump applies to **subscription YAML fetches only** today. After accounts are bound to Clash nodes, **the node's own dial does NOT chain through the jump** — proper "jump → node → target" chain dial is still unimplemented (mihomo's public `ProxyAdapter` interface doesn't expose a clean upstream-dialer injection point). Workaround: use v1's per-account proxy field instead, or run a separate mihomo sidecar.
+
+### 📝 跳板 URL 格式速查 / Jump URL cheatsheet
+
+支持 6 种 scheme，可以直接从机场订阅复制粘贴：
+
+```
+http://[user:pass@]host:port
+https://[user:pass@]host:port
+socks5://[user:pass@]host:port
+socks5h://[user:pass@]host:port
+trojan://password@host:443?sni=example.com[&skip-cert-verify=true&alpn=h2,http/1.1]
+ss://base64(method:password)@host:port[#name]              ← SIP002 (推荐)
+ss://base64(method:password@host:port)[#name]              ← legacy
+ss://method:password@host:port                             ← plaintext
+vmess://base64(JSON)                                       ← V2RayN，base64 解码后是 JSON
+```
+
+#### 🟦 ss 示范 / Shadowsocks examples
+
+```bash
+# SIP002 (推荐写法)
+# 用户信息部分 = base64("aes-256-gcm:my-secret-pass") = "YWVzLTI1Ni1nY206bXktc2VjcmV0LXBhc3M="
+ss://YWVzLTI1Ni1nY206bXktc2VjcmV0LXBhc3M=@1.2.3.4:8388
+
+# 明文（最直观，机场订阅基本不用）
+ss://aes-256-gcm:my-secret-pass@1.2.3.4:8388
+
+# 想测能不能解析？粘进设置页保存一下，能保存说明解析通过；接着按 「测试」 看真实联通性。
+```
+
+#### 🟪 vmess 示范 / VMess example
+
+```jsonc
+// 第一步：写出 V2RayN 标准 JSON
+{
+  "v": "2",
+  "ps": "🇯🇵 jp-test",
+  "add": "1.2.3.4",
+  "port": 443,
+  "id": "d3c8f4f8-3e3a-4b1f-8c8b-1d4f6a7b9e2c",
+  "aid": 0,
+  "scy": "auto",
+  "net": "ws",          // ws / tcp / grpc / ...
+  "type": "none",
+  "host": "cdn.example.com",
+  "path": "/ray",
+  "tls": "tls",
+  "sni": "cdn.example.com"
+}
+```
+
+```bash
+# 第二步：把 JSON 整体 base64，贴 vmess:// 前缀
+vmess://eyJ2IjoiMiIsInBzIjoi8J+HrPCfh7Qgc2FtcGxlIiwiYWRkIjoiMS4yLjMuNCIsInBvcnQiOjQ0MywiaWQiOiJkM2M4ZjRmOC0zZTNhLTRiMWYtOGM4Yi0xZDRmNmE3YjllMmMiLCJhaWQiOjAsInNjeSI6ImF1dG8iLCJuZXQiOiJ3cyIsInR5cGUiOiJub25lIiwiaG9zdCI6ImNkbi5leGFtcGxlLmNvbSIsInBhdGgiOiIvcmF5IiwidGxzIjoidGxzIiwic25pIjoiY2RuLmV4YW1wbGUuY29tIn0=
+```
+
+字段映射 / Field mapping:
+
+| V2RayN 字段 | mihomo proxy 字段 |
+|-------------|-------------------|
+| `add` | `server` |
+| `port` | `port` |
+| `id` | `uuid` |
+| `aid` | `alterId` |
+| `scy` | `cipher` (默认 auto) |
+| `net` | `network` (tcp/ws/grpc...) |
+| `tls`=`"tls"` | `tls: true` |
+| `sni` 或 `host` | `servername` |
+| `host` | `ws-opts.headers.Host` |
+| `path` | `ws-opts.path` |
+
+### 🟩 trojan 示范 / Trojan example
+
+```bash
+# 最常见的形式 (默认 SNI = host)
+trojan://Sw0rdF1sh@example.com:443
+
+# 自定义 SNI
+trojan://Sw0rdF1sh@1.2.3.4:443?sni=example.com
+
+# 跳过证书校验 + 指定 ALPN
+trojan://Sw0rdF1sh@1.2.3.4:443?sni=example.com&skip-cert-verify=true&alpn=h2,http/1.1
+```
+
+### v2.3 修改的文件 / v2.3 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/web/index.html` | `loadData()` 改为 await Clash → 再并发其他；新增 `formatAccountSchedule(a)` 在卡片右下角显示 🎁 trial 到期 / 🔄 重置日 / ⏳ 剩余天数 |
 
 ---
 
 ## v2.2 — ss/vmess 跳板 + 跳板测试按钮 + 前端正则修复 / ss/vmess jump + jump test button + frontend regex fix
+
 
 紧接 v2.1 的修复轮：
 
