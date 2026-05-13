@@ -79,6 +79,30 @@ func (h *Handler) apiUpdateModelMapping(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "entries": len(config.GetModelMapping())})
 }
 
+// apiGetTestEndpoints returns the list of probe endpoints the UI can show
+// in its dropdown. Each entry has a stable name + URL + a flag describing
+// what kind of result it produces.
+func (h *Handler) apiGetTestEndpoints(w http.ResponseWriter, r *http.Request) {
+	type uiEntry struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+		Kind string `json:"kind"` // "geo" | "trace" | "kiro"
+	}
+	eps := proxyTestEndpoints()
+	out := make([]uiEntry, 0, len(eps))
+	for _, e := range eps {
+		kind := "geo"
+		switch {
+		case e.IsKiroPing:
+			kind = "kiro"
+		case e.IsTrace:
+			kind = "trace"
+		}
+		out = append(out, uiEntry{Name: e.Name, URL: e.URL, Kind: kind})
+	}
+	_ = json.NewEncoder(w).Encode(out)
+}
+
 // apiTestOutbound runs a connectivity + Geo probe through the currently
 // configured global jump. Reports failure cleanly when no jump is set.
 func (h *Handler) apiTestOutbound(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +115,7 @@ func (h *Handler) apiTestOutbound(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	res := runProxyTest(client)
+	res := runProxyTest(client, r.URL.Query().Get("endpoint"))
 	res.Mode = "jump"
 	if jumpURL := config.GetGlobalOutboundProxy(); jumpURL != "" {
 		// Surface what we actually tested so the operator can sanity-check.
@@ -220,7 +244,7 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 
 	client := clash.PickAccountClient(acc)
 
-	res := runProxyTest(client)
+	res := runProxyTest(client, r.URL.Query().Get("endpoint"))
 	res.Mode = mode
 	_ = json.NewEncoder(w).Encode(res)
 }
@@ -228,54 +252,84 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 // runProxyTest hits a list of public IP-info endpoints through `client` and
 // returns the first successful response, or the last error.
 //
-// We try multiple unrelated providers because some nodes (especially HK
-// machines) blacklist the ipinfo / ifconfig.co / ip.sb family. Cloudflare's
-// trace endpoint is plain text and is therefore parsed separately.
-func runProxyTest(client *http.Client) proxyTestResult {
-	type endpoint struct {
-		url      string
-		isTrace  bool // true → key=value text format from /cdn-cgi/trace
-	}
-	endpoints := []endpoint{
-		{"https://ipinfo.io/json", false},
-		{"https://ifconfig.co/json", false},
-		{"https://api.ip.sb/geoip", false},
-		{"https://www.cloudflare.com/cdn-cgi/trace", true},
-		{"https://1.1.1.1/cdn-cgi/trace", true},
-		{"https://api.myip.com", false},
+// If `pickName` is non-empty it must match one of the registered endpoint
+// names — only that single endpoint is tried (used by the UI dropdown so
+// the operator can pick a probe the current node operator hasn't blocked).
+//
+// Empty `pickName` = fallback chain: try every registered endpoint in order
+// and return on the first 2xx parsable response.
+func runProxyTest(client *http.Client, pickName string) proxyTestResult {
+	endpoints := proxyTestEndpoints()
+	if pickName != "" {
+		filtered := endpoints[:0:0]
+		for _, e := range endpoints {
+			if e.Name == pickName {
+				filtered = append(filtered, e)
+			}
+		}
+		if len(filtered) == 0 {
+			return proxyTestResult{
+				OK:    false,
+				Error: fmt.Sprintf("unknown endpoint name %q", pickName),
+			}
+		}
+		endpoints = filtered
 	}
 	start := time.Now()
 	var lastErr string
 	for _, ep := range endpoints {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, "GET", ep.url, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, "GET", ep.URL, nil)
 		req.Header.Set("User-Agent", "curl/8.4")
-		req.Header.Set("Accept", "application/json,text/plain")
+		req.Header.Set("Accept", "application/json,text/plain,*/*")
 		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
-			lastErr = ep.url + ": " + err.Error()
+			lastErr = ep.URL + ": " + err.Error()
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		resp.Body.Close()
 		cancel()
-		if resp.StatusCode/100 != 2 {
-			lastErr = fmt.Sprintf("%s: HTTP %d", ep.url, resp.StatusCode)
+
+		switch {
+		case ep.IsKiroPing:
+			// Any HTTP response means TCP + TLS + HTTP all worked through the
+			// chain. Kiro will normally return 403/404 without auth — that's
+			// exactly the proof we want.
+			r := proxyTestResult{
+				IP:      "",
+				Country: fmt.Sprintf("HTTP %d (Kiro reachable)", resp.StatusCode),
+			}
+			r.OK = true
+			r.Endpoint = ep.URL
+			r.LatencyMs = time.Since(start).Milliseconds()
+			return r
+		case resp.StatusCode/100 != 2:
+			lastErr = fmt.Sprintf("%s: HTTP %d", ep.URL, resp.StatusCode)
 			continue
 		}
+
 		var r proxyTestResult
-		if ep.isTrace {
+		switch {
+		case ep.IsTrace:
 			r = parseCloudflareTrace(body)
-		} else {
+		case ep.IsPlainIP:
+			ip := strings.TrimSpace(string(body))
+			if ip == "" || strings.ContainsAny(ip, "<>{}") {
+				lastErr = ep.URL + ": empty/non-IP body"
+				continue
+			}
+			r = proxyTestResult{IP: ip}
+		default:
 			r = parseGeoResponse(body)
 		}
 		if r.IP == "" && r.Error == "" {
-			lastErr = ep.url + ": empty parse"
+			lastErr = ep.URL + ": empty parse"
 			continue
 		}
 		r.OK = true
-		r.Endpoint = ep.url
+		r.Endpoint = ep.URL
 		r.LatencyMs = time.Since(start).Milliseconds()
 		return r
 	}
@@ -283,6 +337,37 @@ func runProxyTest(client *http.Client) proxyTestResult {
 		OK:        false,
 		LatencyMs: time.Since(start).Milliseconds(),
 		Error:     lastErr,
+	}
+}
+
+// testEndpoint declares one probe target. Names are stable identifiers the
+// UI dropdown sends back; URLs are what we actually GET.
+type testEndpoint struct {
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	IsTrace    bool   `json:"-"` // true → key=value text from /cdn-cgi/trace
+	IsPlainIP  bool   `json:"-"` // true → body is just "<ip>\n"
+	IsKiroPing bool   `json:"-"` // true → success = any HTTP response (no JSON parse)
+}
+
+func proxyTestEndpoints() []testEndpoint {
+	return []testEndpoint{
+		{"ipinfo.io", "https://ipinfo.io/json", false, false, false},
+		{"ifconfig.co", "https://ifconfig.co/json", false, false, false},
+		{"api.ip.sb", "https://api.ip.sb/geoip", false, false, false},
+		{"api.myip.com", "https://api.myip.com", false, false, false},
+		{"ipify (api64)", "https://api64.ipify.org?format=json", false, false, false},
+		{"ipify (api)", "https://api.ipify.org?format=json", false, false, false},
+		{"ipapi.co", "https://ipapi.co/json", false, false, false},
+		{"ip-api.com", "http://ip-api.com/json", false, false, false},
+		{"httpbin.org/ip", "https://httpbin.org/ip", false, false, false},
+		{"icanhazip.com", "https://icanhazip.com", false, true, false},
+		{"checkip.amazonaws", "https://checkip.amazonaws.com", false, true, false},
+		{"geo.geosurf.io", "https://geo.geosurf.io/", false, false, false},
+		{"cloudflare trace (cf.com)", "https://www.cloudflare.com/cdn-cgi/trace", true, false, false},
+		{"cloudflare trace (1.1.1.1)", "https://1.1.1.1/cdn-cgi/trace", true, false, false},
+		{"Kiro API (codewhisperer)", "https://codewhisperer.us-east-1.amazonaws.com/", false, false, true},
+		{"Kiro API (q)", "https://q.us-east-1.amazonaws.com/", false, false, true},
 	}
 }
 

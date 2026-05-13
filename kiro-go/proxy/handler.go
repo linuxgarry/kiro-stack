@@ -2146,6 +2146,8 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiUpdateOutbound(w, r)
 	case path == "/outbound/test" && r.Method == "POST":
 		h.apiTestOutbound(w, r)
+	case path == "/test-endpoints" && r.Method == "GET":
+		h.apiGetTestEndpoints(w, r)
 	case path == "/modelmapping" && r.Method == "GET":
 		h.apiGetModelMapping(w, r)
 	case path == "/modelmapping" && r.Method == "POST":

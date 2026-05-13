@@ -8,12 +8,48 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
-| 🆕 **v2.4** | 🔗 **链式 dial 真的实现了** · jump → node → target 三跳跑通 |
+| 🆕 **v2.5** | 测试接口下拉框（含 geosurf / Kiro 直测）· 「联通」改为「连接成功」|
+| **v2.4** | 🔗 **链式 dial 真的实现了** · jump → node → target 三跳跑通 |
 | **v2.3** | UI 缓存竞态修复 · 账号卡到期 / 重置日期 · ss/vmess 用法说明 |
 | **v2.2** | 跳板 +ss/+vmess · 跳板「测试」按钮 · 前端正则修复 |
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🧪 v2.5 — 测试接口可选 + Kiro 直测 / Pickable test endpoint + Kiro direct probe
+
+v2.4 验证了链 dial 跑通，但「测试」按钮在节点屏蔽 ipinfo 类接口时会全军覆没。这一轮把测试改成可选：
+
+After v2.4 chain dial works, but the "Test" button still kept failing on nodes that blacklist ipinfo-family endpoints. This round makes the probe target user-pickable:
+
+### 加了什么 / New
+
+- **测试接口下拉框**：账号卡的「代理」行 + 设置页跳板那一行都新增一个下拉，包含 16 个候选 endpoint。空选项 = 「自动 (依次回退)」（v2.4 行为，按顺序试到一个成功为止）。
+- **包含 [geo.geosurf.io](https://geo.geosurf.io/)** 这个新 endpoint，加上 ipinfo / ifconfig.co / api.ip.sb / api.myip.com / ipify (api64 + api) / ipapi.co / ip-api.com / httpbin.org/ip / icanhazip.com / checkip.amazonaws / cloudflare trace ×2 共 14 个 geo 类。
+- **🎯 Kiro 直测选项**：下拉里有两条 `[kiro]` 标记的选项 — `Kiro API (codewhisperer)` 和 `Kiro API (q)`，直接打到 `codewhisperer.us-east-1.amazonaws.com` / `q.us-east-1.amazonaws.com` 根目录。任何 HTTP 响应（包括预期中的 403/404）= 链路通；这是判断「Kiro 能不能用」最直接的探针，不依赖第三方 geo 服务。
+- **「联通」→「连接成功」/ "OK" → "Connected"**，更直白。
+
+- **A test-endpoint dropdown** appears in the proxy row of every account card and next to the outbound jump's Test button. 16 candidate endpoints; the empty option = "Auto (fallback)" which keeps v2.4 behavior.
+- **Includes `geo.geosurf.io`** plus ipinfo / ifconfig.co / ip.sb / api.myip.com / ipify (api64 + api) / ipapi.co / ip-api.com / httpbin.org/ip / icanhazip.com / checkip.amazonaws / cloudflare trace ×2 — 14 geo probes total.
+- **🎯 Two `[kiro]` options** that hit `codewhisperer.us-east-1.amazonaws.com` and `q.us-east-1.amazonaws.com` directly. Any HTTP response (403/404 expected without auth) = path is reachable. This is the most honest "can Kiro work?" probe, independent of third-party geo services.
+- **Success label changed**: "联通" → "连接成功" (zh) / "OK" → "Connected" (en).
+
+### 怎么用 / Usage
+
+1. 想看节点真实出口 IP/Geo？下拉选 `ipinfo.io` 或 `geo.geosurf.io`，按测试。
+2. 节点屏蔽 ipinfo 家族？换 `cloudflare trace (cf.com)` 或 `httpbin.org/ip`。
+3. 只关心「Kiro API 能不能调」？选 `Kiro API (codewhisperer)`。返回 HTTP 4xx 都算成功 — 说明 TCP + TLS + HTTP 三层都穿过链路了。
+4. 不知道选哪个？留「自动 (依次回退)」就行。
+
+### v2.5 修改的文件 / v2.5 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/proxy/clash_handlers.go` | `runProxyTest` 增加 `pickName string` 参数；新增 `proxyTestEndpoints()` 注册 16 个候选；`testEndpoint` 结构含 `IsTrace` / `IsPlainIP` / `IsKiroPing` 三种解析模式；新增 `apiGetTestEndpoints` 给 UI 用；`apiTestOutbound` / `apiTestAccountProxy` 现在读 `?endpoint=` 查询参数 |
+| `kiro-go/proxy/handler.go` | 注册 `GET /admin/api/test-endpoints` 路由 |
+| `kiro-go/web/index.html` | 新增 `loadTestEndpoints()` / `testEndpointSelectOptions()` / `renderTestEndpointSelect(elId)`；账号卡 + 跳板设置区都接上下拉；`testAccountProxy` 和 `testOutbound` 把 `?endpoint=` 拼到请求里；i18n: `accounts.proxyTestOK` 改为「连接成功」/「Connected」；新增 `settings.testEndpoint` / `settings.testEndpointAuto` 文案 |
 
 ---
 

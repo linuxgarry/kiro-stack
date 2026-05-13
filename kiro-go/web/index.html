@@ -1107,6 +1107,9 @@
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <button class="btn btn-primary" onclick="saveOutbound()" data-i18n="common.save"></button>
+                    <span style="font-size:12px;color:#64748b">|</span>
+                    <span style="font-size:12px;color:#475569" data-i18n="settings.testEndpoint"></span>
+                    <select id="outboundTestEndpoint" style="font-size:12px;padding:3px 6px"></select>
                     <button class="btn btn-secondary" onclick="testOutbound()" data-i18n="settings.outboundTest"></button>
                     <span id="outboundTestResult" style="font-size:12px;flex-basis:100%;margin-top:4px"></span>
                 </div>
@@ -1311,12 +1314,14 @@
                 'accounts.proxyDirect': '直连',
                 'accounts.proxyTest': '测试',
                 'accounts.proxyTestRunning': '测试中…',
-                'accounts.proxyTestOK': '联通',
+                'accounts.proxyTestOK': '连接成功',
                 'accounts.proxyTestFail': '失败',
                 'settings.outboundTitle': '全局跳板代理（前置）',
                 'settings.outboundLabel': '跳板地址',
                 'settings.outboundHint': '订阅拉取走这里。支持 http / https / socks5 / socks5h / trojan / ss / vmess。示例：trojan://密码@host:443?sni=example.com',
                 'settings.outboundTest': '测试',
+                'settings.testEndpoint': '测试接口:',
+                'settings.testEndpointAuto': '自动 (依次回退)',
                 'settings.mappingTitle': '模型映射',
                 'settings.mappingHint': '左：调用方传入的 model 名；右：实际转发给 Kiro 的 model 名。未列出的模型按原名透传。',
                 'settings.mappingAdd': '+ 添加',
@@ -1525,12 +1530,14 @@
                 'accounts.proxyDirect': 'Direct',
                 'accounts.proxyTest': 'Test',
                 'accounts.proxyTestRunning': 'Testing…',
-                'accounts.proxyTestOK': 'OK',
+                'accounts.proxyTestOK': 'Connected',
                 'accounts.proxyTestFail': 'Failed',
                 'settings.outboundTitle': 'Global Jump Host (Prepend)',
                 'settings.outboundLabel': 'Jump URL',
                 'settings.outboundHint': 'Subscription fetches go through this jump. Supports http / https / socks5 / socks5h / trojan / ss / vmess. Example: trojan://password@host:443?sni=example.com',
                 'settings.outboundTest': 'Test',
+                'settings.testEndpoint': 'Test endpoint:',
+                'settings.testEndpointAuto': 'Auto (fallback)',
                 'settings.mappingTitle': 'Model Mapping',
                 'settings.mappingHint': 'Left: inbound model name from callers. Right: what we actually send to Kiro. Unlisted models pass through unchanged.',
                 'settings.mappingAdd': '+ Add',
@@ -1773,6 +1780,7 @@
             // proxy dropdowns render with an empty node list and every
             // bound node looks like "(missing)" until the next interaction.
             await loadClash();
+            await loadTestEndpoints();
             await Promise.all([loadStats(), loadAccounts(), loadSettings(), loadVersion()]);
             document.getElementById('claudeEndpoint').textContent = baseUrl + '/v1/messages';
             document.getElementById('openaiEndpoint').textContent = baseUrl + '/v1/chat/completions';
@@ -1831,6 +1839,7 @@
                     '<div class="account-row">' +
                     '<span>' + t('accounts.proxy') + ':</span>' +
                     renderProxySelect(a) +
+                    renderTestEndpointSelect('test-ep-' + a.id) +
                     '<button class="btn btn-sm btn-secondary" onclick="testAccountProxy(\'' + a.id + '\')">' + t('accounts.proxyTest') + '</button>' +
                     '<span id="proxy-test-' + a.id + '" style="flex-basis:100%;font-size:11px"></span>' +
                     '</div>' +
@@ -2098,8 +2107,11 @@
             if (!result) return;
             result.style.color = '#64748b';
             result.textContent = t('accounts.proxyTestRunning');
+            const epSel = document.getElementById('outboundTestEndpoint');
+            const ep = epSel ? epSel.value : '';
             try {
-                const r = await fetch('/admin/api/outbound/test', {
+                const url = '/admin/api/outbound/test' + (ep ? ('?endpoint=' + encodeURIComponent(ep)) : '');
+                const r = await fetch(url, {
                     method: 'POST', headers: { 'X-Admin-Password': password }
                 });
                 const d = await r.json().catch(() => ({}));
@@ -2114,8 +2126,9 @@
                 if (geo) parts.push(geo);
                 if (d.asn) parts.push(d.asn);
                 parts.push((d.latencyMs || 0) + 'ms');
+                if (d.endpoint) parts.push('@ ' + d.endpoint);
                 result.style.color = '#059669';
-                result.textContent = (t('accounts.proxyTestOK') || 'OK') + ' ' + parts.join(' · ');
+                result.textContent = (t('accounts.proxyTestOK') || 'Connected') + ' ' + parts.join(' · ');
             } catch (e) {
                 result.style.color = '#ef4444';
                 result.textContent = (t('accounts.proxyTestFail') || 'Failed') + ': ' + e.message;
@@ -2427,8 +2440,11 @@
             if (!el) return;
             el.style.color = '#64748b';
             el.textContent = t('accounts.proxyTestRunning');
+            const epSel = document.getElementById('test-ep-' + id);
+            const ep = epSel ? epSel.value : '';
             try {
-                const res = await fetch('/admin/api/accounts/' + id + '/proxy-test', {
+                const url = '/admin/api/accounts/' + id + '/proxy-test' + (ep ? ('?endpoint=' + encodeURIComponent(ep)) : '');
+                const res = await fetch(url, {
                     method: 'POST', headers: { 'X-Admin-Password': password }
                 });
                 const d = await res.json().catch(() => ({}));
@@ -2444,12 +2460,37 @@
                 if (d.asn) parts.push(d.asn);
                 parts.push((d.latencyMs || 0) + 'ms');
                 parts.push('[' + (d.mode || '?') + ']');
+                if (d.endpoint) parts.push('@ ' + d.endpoint);
                 el.style.color = '#059669';
                 el.textContent = t('accounts.proxyTestOK') + ' ' + parts.join(' · ');
             } catch (e) {
                 el.style.color = '#ef4444';
                 el.textContent = t('accounts.proxyTestFail') + ': ' + e.message;
             }
+        }
+        // Test-endpoint registry — populated once on page load.
+        let testEndpoints = [];
+        async function loadTestEndpoints() {
+            try {
+                const r = await fetch('/admin/api/test-endpoints', { headers: { 'X-Admin-Password': password } });
+                testEndpoints = await r.json() || [];
+            } catch (e) { testEndpoints = []; }
+            // Populate the outbound section's dropdown if present.
+            const sel = document.getElementById('outboundTestEndpoint');
+            if (sel) sel.innerHTML = testEndpointSelectOptions();
+        }
+        function testEndpointSelectOptions(selectedName) {
+            const escAttr = s => (s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+            let opts = '<option value="">' + (t('settings.testEndpointAuto') || 'Auto') + '</option>';
+            for (const e of testEndpoints) {
+                const tag = e.kind === 'kiro' ? ' [kiro]' : (e.kind === 'trace' ? ' [trace]' : '');
+                const sel = (e.name === selectedName) ? ' selected' : '';
+                opts += '<option value="' + escAttr(e.name) + '"' + sel + '>' + escAttr(e.name) + tag + '</option>';
+            }
+            return opts;
+        }
+        function renderTestEndpointSelect(elId) {
+            return '<select id="' + elId + '" style="font-size:11px;padding:2px 4px;max-width:180px">' + testEndpointSelectOptions() + '</select>';
         }
 
         async function toggleAccount(id, enabled) {
