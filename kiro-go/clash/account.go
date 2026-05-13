@@ -1,8 +1,14 @@
 package clash
 
 import (
+	"errors"
+	"fmt"
+	"io"
 	"kiro-api-proxy/config"
+	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -15,10 +21,15 @@ import (
 // If ProxyNode is set but the node isn't currently loaded (e.g. after a
 // subscription reload that dropped it), we fall back to ProxyURL → direct
 // so that the account keeps working.
+//
+// If ProxyNode is loaded but fails at request time with a transport-level
+// network error (EOF, timeout, connection reset, etc.), we retry once through
+// account.ProxyURL when present, otherwise through the global jump. This keeps
+// a bad Clash node from taking real Kiro calls down when the jump is healthy.
 func PickAccountClient(account *config.Account) *http.Client {
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 30*time.Second); err == nil {
-			return c
+			return withRuntimeFallback(c, account, 30*time.Second, "clash:"+account.ProxyNode)
 		}
 	}
 	var proxyURL string
@@ -33,7 +44,7 @@ func PickAccountClient(account *config.Account) *http.Client {
 func PickAccountStreamClient(account *config.Account) *http.Client {
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 5*time.Minute); err == nil {
-			return c
+			return withRuntimeFallback(c, account, 5*time.Minute, "clash:"+account.ProxyNode)
 		}
 	}
 	var proxyURL string
@@ -41,4 +52,100 @@ func PickAccountStreamClient(account *config.Account) *http.Client {
 		proxyURL = account.ProxyURL
 	}
 	return config.GetKiroStreamHTTPClient(proxyURL)
+}
+
+func withRuntimeFallback(primary *http.Client, account *config.Account, timeout time.Duration, primaryName string) *http.Client {
+	if primary == nil || primary.Transport == nil {
+		return primary
+	}
+
+	fallbackName, fallbackTransport := fallbackTransportFor(account, timeout)
+	if fallbackTransport == nil {
+		return primary
+	}
+
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &fallbackRoundTripper{
+			primaryName:  primaryName,
+			primary:      primary.Transport,
+			fallbackName: fallbackName,
+			fallback:     fallbackTransport,
+		},
+	}
+}
+
+func fallbackTransportFor(account *config.Account, timeout time.Duration) (string, http.RoundTripper) {
+	if account != nil && strings.TrimSpace(account.ProxyURL) != "" {
+		c := config.GetHTTPClient(account.ProxyURL, timeout, 50, 10)
+		if c != nil && c.Transport != nil {
+			return "account proxyUrl", c.Transport
+		}
+	}
+	if c, ok := ClientForJumpOnly(timeout); ok && c != nil && c.Transport != nil {
+		return "global jump", c.Transport
+	}
+	return "", nil
+}
+
+type fallbackRoundTripper struct {
+	primaryName  string
+	primary      http.RoundTripper
+	fallbackName string
+	fallback     http.RoundTripper
+}
+
+func (rt *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := rt.primary.RoundTrip(req)
+	if err == nil || !shouldRetryWithFallback(err) {
+		return resp, err
+	}
+	if req.Body != nil && req.GetBody == nil {
+		return resp, err
+	}
+
+	retryReq := req.Clone(req.Context())
+	if req.Body != nil {
+		body, bodyErr := req.GetBody()
+		if bodyErr != nil {
+			return resp, err
+		}
+		retryReq.Body = body
+	}
+	fmt.Printf("[ProxyFallback] %s failed (%v); retrying via %s\n", rt.primaryName, err, rt.fallbackName)
+	return rt.fallback.RoundTrip(retryReq)
+}
+
+func shouldRetryWithFallback(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	retryMarkers := []string{
+		"eof",
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"deadline exceeded",
+		"i/o timeout",
+		"tls handshake timeout",
+		"server misbehaving",
+		"no such host",
+	}
+	for _, marker := range retryMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
