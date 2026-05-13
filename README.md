@@ -46,6 +46,7 @@ VPS 上 SG 出口 → 配置 jump=`trojan://...@oracleus1.adaosb.xyz:443?sni=...
 | jump 清空 + 香港节点 | DNS 污染：`bepgzbgp01.114837322.xyz:14091 connect error: dial tcp 127.0.0.1:14091`（VPS 直连节点失败）|
 | jump=Oracle US + 香港节点 | `proxyName[__kiro_jump__] not found` ❌（修复前 — 缺少 tunnel 注册）|
 | 修复后：jump=Oracle US + 香港节点 | ✅ 错误消失，dial 时间从 86ms 飙到 2052ms — 这是 SG → Virginia → HK → 目标 三跳的 RTT，链生效|
+| **🎯 端到端：真实 Kiro API 调用** | ✅ `POST /v1/messages` model=`claude-opus-4.7` 返回 `"chained"`，链路：**SG VPS → trojan(Oracle Virginia) → JP 节点 → codewhisperer.us-east-1.amazonaws.com** |
 
 VPS egress is Singapore. With `jump = trojan://...@oracleus1.adaosb.xyz:443?sni=...` (Oracle Virginia) and an account bound to a Hong Kong node:
 
@@ -54,12 +55,13 @@ VPS egress is Singapore. With `jump = trojan://...@oracleus1.adaosb.xyz:443?sni=
 | Jump cleared + HK node | DNS hijack: `bepgzbgp01.114837322.xyz:14091 connect error: dial tcp 127.0.0.1:14091` (VPS can't reach the HK node directly) |
 | Jump=Oracle US + HK node | `proxyName[__kiro_jump__] not found` ❌ (pre-fix, missing tunnel registration) |
 | After fix: Jump=Oracle US + HK node | ✅ Name error gone; dial time jumps from 86ms to 2052ms — that's the SG → Virginia → HK → target three-hop RTT |
+| **🎯 End-to-end: real Kiro API call** | ✅ `POST /v1/messages` with model=`claude-opus-4.7` returned a proper claude reply. Path: **SG VPS → trojan(Oracle Virginia) → JP node → codewhisperer.us-east-1.amazonaws.com** |
 
 ### ⚠️ 一个已知的二次问题 / Known follow-up
 
-链通了之后，HK 节点到 `api.ip.sb` 的 connection EOF — 是节点运营商屏蔽了那一类 ipinfo 服务，跟链路实现无关。换 `ipinfo.io / ifconfig.co` fallback 也不行（同一类服务）。后续如果要更稳的「联通性测试」，可以加一组备选 endpoint（比如 cloudflare trace），但这跟链 dial 的实现无关，先不动。
+链通了之后，「测试」按钮里的 `api.ip.sb / ipinfo.io / ifconfig.co / api.myip.com` 全部 EOF — 这是节点运营商屏蔽 geo-IP 服务这一类目标，跟链路实现无关。**Kiro 上游（AWS CodeWhisperer）不在被屏蔽的范围里**，所以真正用 Kiro 完全没问题。v2.2 加的 Cloudflare trace endpoint 在某些节点上能解决这个，但不是普适。
 
-After the chain came up, the HK node refuses connections to `api.ip.sb` (node provider blacklists that family of geo-info endpoints — same family as ipinfo.io / ifconfig.co, all of which fall back to each other). Not a chain-dial issue. Adding more diverse test endpoints (e.g. cloudflare trace) is its own future task.
+After the chain is up, the connectivity-test button still EOFs against `api.ip.sb / ipinfo.io / ifconfig.co / api.myip.com` — node operators blacklist that whole family of geo-IP services. **Kiro's upstream (AWS CodeWhisperer) is NOT on those blocklists**, so the actual Kiro API path works regardless. The v2.2 Cloudflare trace fallback works on some nodes but isn't universal.
 
 ### v2.4 修改的文件 / v2.4 files changed
 
