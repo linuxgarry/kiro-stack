@@ -1102,10 +1102,14 @@
                 <div class="card-header"><span class="card-title" data-i18n="settings.outboundTitle"></span></div>
                 <div class="form-group">
                     <label data-i18n="settings.outboundLabel"></label>
-                    <input type="text" id="globalOutboundUrl" placeholder="http://host:port / socks5://host:port">
+                    <input type="text" id="globalOutboundUrl" placeholder="trojan://pass@host:443?sni=host  /  ss://...  /  vmess://...">
                     <small style="color:#64748b;font-size:11px;display:block;margin-top:4px" data-i18n="settings.outboundHint"></small>
                 </div>
-                <button class="btn btn-primary" onclick="saveOutbound()" data-i18n="common.save"></button>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="saveOutbound()" data-i18n="common.save"></button>
+                    <button class="btn btn-secondary" onclick="testOutbound()" data-i18n="settings.outboundTest"></button>
+                    <span id="outboundTestResult" style="font-size:12px;flex-basis:100%;margin-top:4px"></span>
+                </div>
             </div>
             <div class="card">
                 <div class="card-header">
@@ -1311,7 +1315,8 @@
                 'accounts.proxyTestFail': '失败',
                 'settings.outboundTitle': '全局跳板代理（前置）',
                 'settings.outboundLabel': '跳板地址',
-                'settings.outboundHint': '所有出站流量先走这里，再到 Clash 节点 / 直接目标。VPS 直连屏蔽了节点的场景必备。支持 http/https/socks5/trojan。示例：trojan://密码@host:443?sni=example.com',
+                'settings.outboundHint': '订阅拉取走这里。支持 http / https / socks5 / socks5h / trojan / ss / vmess。示例：trojan://密码@host:443?sni=example.com',
+                'settings.outboundTest': '测试',
                 'settings.mappingTitle': '模型映射',
                 'settings.mappingHint': '左：调用方传入的 model 名；右：实际转发给 Kiro 的 model 名。未列出的模型按原名透传。',
                 'settings.mappingAdd': '+ 添加',
@@ -1524,7 +1529,8 @@
                 'accounts.proxyTestFail': 'Failed',
                 'settings.outboundTitle': 'Global Jump Host (Prepend)',
                 'settings.outboundLabel': 'Jump URL',
-                'settings.outboundHint': 'Every outbound connection (subscription fetch + each Clash node + direct calls) is dialed THROUGH this jump first. Required when the VPS cannot reach Clash node servers directly. Supports http/https/socks5/trojan. Example: trojan://password@host:443?sni=example.com',
+                'settings.outboundHint': 'Subscription fetches go through this jump. Supports http / https / socks5 / socks5h / trojan / ss / vmess. Example: trojan://password@host:443?sni=example.com',
+                'settings.outboundTest': 'Test',
                 'settings.mappingTitle': 'Model Mapping',
                 'settings.mappingHint': 'Left: inbound model name from callers. Right: what we actually send to Kiro. Unlisted models pass through unchanged.',
                 'settings.mappingAdd': '+ Add',
@@ -2046,10 +2052,12 @@
         async function saveOutbound() {
             const el = document.getElementById('globalOutboundUrl');
             const url = (el ? el.value : '').trim();
-            if (url && !/^(https?|socks5h?):\/\/[^\s/]+/i.test(url)) {
+            if (url && !/^(https?|socks5h?|trojan|ss|vmess):\/\/[^\s]+/i.test(url)) {
                 alert(t('detail.proxyInvalid'));
                 return;
             }
+            const result = document.getElementById('outboundTestResult');
+            if (result) result.textContent = '';
             try {
                 const r = await fetch('/admin/api/outbound', {
                     method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
@@ -2060,6 +2068,34 @@
                 alert(t('detail.saved') || 'Saved');
             } catch (e) {
                 alert((t('detail.saveFailed') || 'Save failed') + ': ' + e.message);
+            }
+        }
+        async function testOutbound() {
+            const result = document.getElementById('outboundTestResult');
+            if (!result) return;
+            result.style.color = '#64748b';
+            result.textContent = t('accounts.proxyTestRunning');
+            try {
+                const r = await fetch('/admin/api/outbound/test', {
+                    method: 'POST', headers: { 'X-Admin-Password': password }
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!d.ok) {
+                    result.style.color = '#ef4444';
+                    result.textContent = (t('accounts.proxyTestFail') || 'Failed') + ': ' + (d.error || ('mode=' + (d.mode || '?')));
+                    return;
+                }
+                const parts = [];
+                if (d.ip) parts.push(d.ip);
+                const geo = [d.country, d.region, d.city].filter(Boolean).join(' / ');
+                if (geo) parts.push(geo);
+                if (d.asn) parts.push(d.asn);
+                parts.push((d.latencyMs || 0) + 'ms');
+                result.style.color = '#059669';
+                result.textContent = (t('accounts.proxyTestOK') || 'OK') + ' ' + parts.join(' · ');
+            } catch (e) {
+                result.style.color = '#ef4444';
+                result.textContent = (t('accounts.proxyTestFail') || 'Failed') + ': ' + e.message;
             }
         }
         let mappingData = {};

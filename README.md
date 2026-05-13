@@ -6,7 +6,34 @@ This repository is forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug
 
 ---
 
-## v2.1 — Trojan 跳板 + UI 收尾 / Trojan jump + UI polish
+## v2.2 — ss/vmess 跳板 + 跳板测试按钮 + 前端正则修复 / ss/vmess jump + jump test button + frontend regex fix
+
+紧接 v2.1 的修复轮：
+
+Quick fix round after v2.1:
+
+- **跳板新增 ss / vmess 协议支持**。Shadowsocks 接受三种常见编码（SIP002 base64、legacy 整体 base64、明文）；vmess 接受 V2RayN 标准的 base64-JSON 形式（含 ws/tls/sni/host）。加上 v2.1 的 trojan，配合 http/https/socks5 已经覆盖大多数订阅里能直接拼出来的协议。
+- **修复前端正则**：v2.1 后端虽然接受 `trojan://`，但前端 `saveOutbound()` 的校验正则忘了加 `trojan|ss|vmess`，把合法 URL 卡在客户端，根本没到后端 — 这就是「填进去说要 socks 或 http 开头」的真正原因。现在前后端正则统一为 `^(https?|socks5h?|trojan|ss|vmess)://[^\s]+`。
+- **跳板设置区新增「测试」按钮** + `POST /admin/api/outbound/test` 端点。一键发请求到 `ipinfo.io / ifconfig.co / ip.sb`（依次 fallback），把延迟 / IP / 国家 / 城市 / ASN 显示在按钮下方，肉眼一秒确认跳板真的活着。
+
+What changed:
+
+- **Jump now also accepts ss:// and vmess://**. Shadowsocks: SIP002 base64, legacy single-blob base64, or plaintext userinfo — all three. VMess: V2RayN-style base64-JSON, with ws / tls / sni / host header support. Combined with v2.1's trojan + http/https/socks5, this covers the protocols you can name-paste from a typical subscription.
+- **Frontend regex fix**: v2.1 made the backend accept `trojan://`, but the frontend `saveOutbound()` validator regex still hard-coded the old set, so legal URLs got bounced client-side and never reached the backend — that's why you saw "must start with socks5:// or http://". Front and back now share `^(https?|socks5h?|trojan|ss|vmess)://[^\s]+`.
+- **Jump test button + `POST /admin/api/outbound/test` endpoint**. One click probes `ipinfo.io / ifconfig.co / ip.sb` (fallback chain) through the configured jump and displays latency / IP / country / city / ASN inline. Verified live: a trojan jump pointing at `oracleus1.adaosb.xyz:443` reported `150.136.98.170 · US / Virginia / Ashburn · AS31898 Oracle · 1004ms` first try.
+
+### v2.2 修改的文件 / v2.2 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/clash/jump.go` | 重构 `parseJumpURL`，按 scheme 路由：`parseStdJump` (http/https/socks5/trojan) / `parseSsJump` (ss 三种形式) / `parseVmessJump` (vmess V2RayN JSON)。新增 `decodeFlexBase64`（试 std/raw/url/raw-url，带 padding 修复）、`splitHostPort`、`coerceInt` 工具 |
+| `kiro-go/proxy/clash_handlers.go` | 新增 `apiTestOutbound`：基于 `clash.ClientForJumpOnly` 跑联通性 + Geo 探测；`urlParseStrict` 接收 ss / vmess |
+| `kiro-go/proxy/handler.go` | 注册 `POST /admin/api/outbound/test` 路由 |
+| `kiro-go/web/index.html` | `saveOutbound` 正则统一为 `^(https?|socks5h?|trojan|ss|vmess)://[^\s]+`；跳板设置区加 「测试」 按钮 + 结果显示行；i18n 文案精简（删掉关于「所有出站走跳板」的过度承诺，改为说订阅拉取） |
+
+---
+
+
 
 紧接 v2 后的小步迭代：
 

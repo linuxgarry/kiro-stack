@@ -79,14 +79,38 @@ func (h *Handler) apiUpdateModelMapping(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "entries": len(config.GetModelMapping())})
 }
 
-// urlParseStrict rejects anything that isn't http/https/socks5/trojan.
+// apiTestOutbound runs a connectivity + Geo probe through the currently
+// configured global jump. Reports failure cleanly when no jump is set.
+func (h *Handler) apiTestOutbound(w http.ResponseWriter, r *http.Request) {
+	client, ok := clash.ClientForJumpOnly(15 * time.Second)
+	if !ok {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": "no global jump configured",
+		})
+		return
+	}
+	res := runProxyTest(client)
+	res.Mode = "jump"
+	if jumpURL := config.GetGlobalOutboundProxy(); jumpURL != "" {
+		// Surface what we actually tested so the operator can sanity-check.
+		res.Endpoint = res.Endpoint + " via " + jumpURL
+	}
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+// urlParseStrict accepts the schemes the global jump can handle.
+// Per-account proxies (v1) still use stdlib http.Client and are validated
+// elsewhere (handler.go) — they support only http/https/socks5(h).
 func urlParseStrict(s string) (string, error) {
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") ||
 		strings.HasPrefix(s, "socks5://") || strings.HasPrefix(s, "socks5h://") ||
-		strings.HasPrefix(s, "trojan://") {
+		strings.HasPrefix(s, "trojan://") || strings.HasPrefix(s, "ss://") ||
+		strings.HasPrefix(s, "vmess://") {
 		return s, nil
 	}
-	return "", fmt.Errorf("proxy URL must start with http://, https://, socks5://, socks5h://, or trojan://")
+	return "", fmt.Errorf("proxy URL must start with http://, https://, socks5://, socks5h://, trojan://, ss://, or vmess://")
 }
 
 // apiUpdateClash accepts {"subscriptionUrl": "..."} from the admin UI.
