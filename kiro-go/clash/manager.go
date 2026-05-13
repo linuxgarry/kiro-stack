@@ -21,6 +21,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/tunnel"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,7 +76,7 @@ func Init() (loaded int, err error) {
 
 	// Try cache first — fast and doesn't need the network.
 	if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
-		if proxies, names, perr := parseSubscription(cached); perr == nil {
+		if proxies, names, perr := parseSubscription(cached, mgr.JumpURL()); perr == nil {
 			mgr.commit(proxies, names, "")
 			loaded = len(proxies)
 		}
@@ -149,6 +150,12 @@ func (m *Manager) Has(name string) bool {
 
 // commit replaces the in-memory proxies map and bumps the generation.
 // Callers must not hold the manager mutex.
+//
+// We also push the proxy set into mihomo's global tunnel.Proxies registry
+// so that `dialer-proxy: __kiro_jump__` lookups resolve. Mihomo's
+// proxydialer.NewByName resolves names against `tunnel.Proxies()` at dial
+// time — without this call, every chain dial fails with
+// "proxyName[__kiro_jump__] not found".
 func (m *Manager) commit(proxies map[string]C.Proxy, names []string, lastErr string) {
 	m.mu.Lock()
 	m.proxies = proxies
@@ -156,7 +163,22 @@ func (m *Manager) commit(proxies map[string]C.Proxy, names []string, lastErr str
 	m.lastFetch = time.Now().Unix()
 	m.lastErr = lastErr
 	atomic.AddUint64(&m.generation, 1)
+	jump := m.jump
 	m.mu.Unlock()
+
+	// Build the registry mihomo will see. We include both real subscription
+	// nodes AND the synthetic jump (so the by-name lookup finds it). The
+	// jump is keyed under jumpProxyName but excluded from `names` returned
+	// to the UI.
+	registry := make(map[string]C.Proxy, len(proxies)+1)
+	for k, v := range proxies {
+		registry[k] = v
+	}
+	if jump != nil {
+		registry[jumpProxyName] = jump
+	}
+	tunnel.UpdateProxies(registry, nil)
+
 	invalidateClientCache()
 }
 
@@ -176,7 +198,7 @@ func (m *Manager) Load(subURL string) (int, error) {
 		return 0, err
 	}
 
-	proxies, names, perr := parseSubscription(raw)
+	proxies, names, perr := parseSubscription(raw, m.JumpURL())
 	if perr != nil {
 		m.setError(fmt.Sprintf("parse failed: %v", perr))
 		return 0, perr
@@ -211,6 +233,11 @@ func (m *Manager) jumpProxy() C.Proxy {
 
 // SetJump installs a new global outbound (jump) proxy from a URL string.
 // An empty string clears the jump.
+//
+// Because the jump is baked into each node's `dialer-proxy` field at
+// parse time, changing the jump requires re-parsing the subscription.
+// We re-parse from the on-disk cache (no network round-trip) so the
+// chain takes effect immediately.
 func (m *Manager) SetJump(rawURL string) error {
 	p, err := parseJumpURL(rawURL)
 	if err != nil {
@@ -225,6 +252,16 @@ func (m *Manager) SetJump(rawURL string) error {
 	m.jumpLastErr = ""
 	atomic.AddUint64(&m.generation, 1)
 	m.mu.Unlock()
+
+	// Re-parse the cached subscription with the new jump so every node
+	// gets `dialer-proxy: __kiro_jump__` re-stamped (or stripped, when
+	// rawURL is "").
+	if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
+		if proxies, names, perr := parseSubscription(cached, m.JumpURL()); perr == nil {
+			m.commit(proxies, names, "")
+		}
+	}
+
 	// Per-node clients embed the dialer chain at construction time; bumping
 	// generation alone won't be enough because old keys are still valid.
 	// Drop everything so the new jump takes effect immediately.
@@ -305,7 +342,15 @@ func fetchSubscription(subURL string) ([]byte, error) {
 // parseSubscription tries to interpret the raw bytes as either:
 //   - Clash YAML config with a "proxies:" list
 //   - base64-encoded YAML (some providers wrap it once)
-func parseSubscription(raw []byte) (map[string]C.Proxy, []string, error) {
+//
+// If `jumpRawURL` is non-empty and parses, parseSubscription prepends a
+// synthetic `__kiro_jump__` proxy to the proxies list and stamps every
+// real node with `dialer-proxy: __kiro_jump__`. mihomo's adapter layer
+// then chains: dial(jump) → tunnel-to-node → node-handshake → target.
+//
+// The jump itself is excluded from the returned `names` slice so the UI
+// dropdown doesn't show it as a selectable account binding.
+func parseSubscription(raw []byte, jumpRawURL string) (map[string]C.Proxy, []string, error) {
 	body := bytes_trimSpace(raw)
 	if looksLikeBase64(body) {
 		if dec, err := base64.StdEncoding.DecodeString(string(body)); err == nil {
@@ -325,16 +370,47 @@ func parseSubscription(raw []byte) (map[string]C.Proxy, []string, error) {
 		return nil, nil, fmt.Errorf("no proxies in subscription")
 	}
 
+	// If a jump is configured, splice it into the proxies list first.
+	// adapter.ParseProxy resolves dialer-proxy by name lookup at construction
+	// time within mihomo's adapter cache, so the jump must be parsed BEFORE
+	// any node that references it.
+	jumpEnabled := false
+	if jumpRawURL != "" {
+		jumpCfg, err := jumpConfigFor(jumpRawURL, jumpProxyName)
+		if err != nil {
+			// Fall through with jump disabled — better to load the subscription
+			// without a chain than to fail completely.
+			jumpEnabled = false
+		} else if jumpCfg != nil {
+			if _, err := adapter.ParseProxy(jumpCfg); err == nil {
+				jumpEnabled = true
+			}
+		}
+	}
+
 	out := make(map[string]C.Proxy, len(cfg.Proxies))
 	names := make([]string, 0, len(cfg.Proxies))
 	for _, pm := range cfg.Proxies {
-		p, err := adapter.ParseProxy(pm)
+		// Don't let a subscription accidentally collide with our reserved name.
+		if n, _ := pm["name"].(string); n == jumpProxyName {
+			continue
+		}
+		// Stamp dialer-proxy onto a *copy* of the node config so we don't
+		// mutate the caller's map.
+		nodeCfg := pm
+		if jumpEnabled {
+			nodeCfg = make(map[string]any, len(pm)+1)
+			for k, v := range pm {
+				nodeCfg[k] = v
+			}
+			nodeCfg["dialer-proxy"] = jumpProxyName
+		}
+		p, err := adapter.ParseProxy(nodeCfg)
 		if err != nil {
 			// Skip unsupported / malformed nodes; do not abort the whole load.
 			continue
 		}
 		if _, dup := out[p.Name()]; dup {
-			// Name collision: keep first, skip second.
 			continue
 		}
 		out[p.Name()] = p

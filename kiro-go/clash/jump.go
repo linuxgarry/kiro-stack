@@ -12,7 +12,13 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 )
 
+// jumpProxyName is the synthetic node name we use when injecting the jump
+// into the subscription's proxies list. It must match the value placed in
+// every other node's `dialer-proxy` field.
+const jumpProxyName = "__kiro_jump__"
+
 // parseJumpURL turns a single URL string into a mihomo C.Proxy.
+//
 // Supported schemes:
 //   - http://[user:pass@]host:port
 //   - https://[user:pass@]host:port
@@ -26,6 +32,26 @@ import (
 //
 // Returns (nil, nil) for an empty input — meaning "no jump host configured".
 func parseJumpURL(raw string) (C.Proxy, error) {
+	cfg, err := jumpConfigFor(raw, jumpProxyName)
+	if err != nil || cfg == nil {
+		return nil, err
+	}
+	p, err := adapter.ParseProxy(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build jump proxy: %w", err)
+	}
+	return p, nil
+}
+
+// jumpConfigFor returns the mihomo node config (a map suitable to feed back
+// into adapter.ParseProxy or to splice into a Clash YAML's `proxies:` list)
+// derived from `raw`, with the `name` field set to `name`. Returns (nil, nil)
+// for empty input.
+//
+// Splitting parse logic out from `parseJumpURL` lets us reuse the resulting
+// config map both for direct dialing and for chain injection into the
+// subscription (`dialer-proxy: __kiro_jump__`).
+func jumpConfigFor(raw, name string) (map[string]any, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
@@ -34,11 +60,11 @@ func parseJumpURL(raw string) (C.Proxy, error) {
 	scheme := schemeOf(raw)
 	switch scheme {
 	case "http", "https", "socks5", "socks5h", "trojan":
-		return parseStdJump(raw)
+		return stdJumpConfig(raw, name)
 	case "ss":
-		return parseSsJump(raw)
+		return ssJumpConfig(raw, name)
 	case "vmess":
-		return parseVmessJump(raw)
+		return vmessJumpConfig(raw, name)
 	default:
 		return nil, fmt.Errorf("unsupported jump scheme %q (expected http/https/socks5/trojan/ss/vmess)", scheme)
 	}
@@ -52,8 +78,8 @@ func schemeOf(raw string) string {
 	return strings.ToLower(raw[:idx])
 }
 
-// parseStdJump handles http/https/socks5/trojan whose syntax fits net/url.
-func parseStdJump(raw string) (C.Proxy, error) {
+// stdJumpConfig handles http/https/socks5/trojan whose syntax fits net/url.
+func stdJumpConfig(raw, name string) (map[string]any, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("parse jump URL: %w", err)
@@ -79,7 +105,7 @@ func parseStdJump(raw string) (C.Proxy, error) {
 	}
 
 	cfg := map[string]any{
-		"name":   "__jump__",
+		"name":   name,
 		"server": host,
 		"port":   port,
 	}
@@ -125,19 +151,13 @@ func parseStdJump(raw string) (C.Proxy, error) {
 			cfg["password"] = pw
 		}
 	}
-
-	p, err := adapter.ParseProxy(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build jump proxy: %w", err)
-	}
-	return p, nil
+	return cfg, nil
 }
 
-// parseSsJump handles ss:// in three observed forms.
-func parseSsJump(raw string) (C.Proxy, error) {
+// ssJumpConfig handles ss:// in three observed forms.
+func ssJumpConfig(raw, name string) (map[string]any, error) {
 	body := strings.TrimPrefix(raw, "ss://")
 	body = strings.TrimPrefix(body, "ss:")
-	// Strip URL fragment (the human-readable name).
 	if i := strings.Index(body, "#"); i >= 0 {
 		body = body[:i]
 	}
@@ -149,14 +169,10 @@ func parseSsJump(raw string) (C.Proxy, error) {
 	var cipher, password, host string
 	var port int
 
-	// Form A: ss://base64(method:password)@host:port    (SIP002)
-	// Form B: ss://method:password@host:port            (plaintext)
-	// Form C: ss://base64(method:password@host:port)    (legacy)
 	if at := strings.LastIndex(body, "@"); at > 0 {
 		userPart := body[:at]
 		hostPart := body[at+1:]
 
-		// Try base64 decode first; fall back to plaintext.
 		if dec, err := decodeFlexBase64(userPart); err == nil && strings.Contains(dec, ":") {
 			parts := strings.SplitN(dec, ":", 2)
 			cipher, password = parts[0], parts[1]
@@ -173,7 +189,6 @@ func parseSsJump(raw string) (C.Proxy, error) {
 		}
 		host, port = h, p
 	} else {
-		// Form C: whole thing is base64-encoded "method:password@host:port"
 		dec, err := decodeFlexBase64(body)
 		if err != nil {
 			return nil, fmt.Errorf("ss URL base64 decode: %w", err)
@@ -192,23 +207,18 @@ func parseSsJump(raw string) (C.Proxy, error) {
 		host, port = h, p
 	}
 
-	cfg := map[string]any{
-		"name":     "__jump__",
+	return map[string]any{
+		"name":     name,
 		"type":     "ss",
 		"server":   host,
 		"port":     port,
 		"cipher":   cipher,
 		"password": password,
-	}
-	p, err := adapter.ParseProxy(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build ss jump: %w", err)
-	}
-	return p, nil
+	}, nil
 }
 
-// parseVmessJump handles vmess://base64(JSON) in V2RayN format.
-func parseVmessJump(raw string) (C.Proxy, error) {
+// vmessJumpConfig handles vmess://base64(JSON) in V2RayN format.
+func vmessJumpConfig(raw, name string) (map[string]any, error) {
 	body := strings.TrimPrefix(raw, "vmess://")
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -247,7 +257,7 @@ func parseVmessJump(raw string) (C.Proxy, error) {
 	}
 
 	cfg := map[string]any{
-		"name":    "__jump__",
+		"name":    name,
 		"type":    "vmess",
 		"server":  server,
 		"port":    port,
@@ -264,7 +274,6 @@ func parseVmessJump(raw string) (C.Proxy, error) {
 			cfg["servername"] = hostHeader
 		}
 	}
-	// WebSocket transport
 	if network == "ws" {
 		wsOpts := map[string]any{}
 		if path, _ := v["path"].(string); path != "" {
@@ -275,16 +284,9 @@ func parseVmessJump(raw string) (C.Proxy, error) {
 		}
 		cfg["ws-opts"] = wsOpts
 	}
-
-	p, err := adapter.ParseProxy(cfg)
-	if err != nil {
-		return nil, fmt.Errorf("build vmess jump: %w", err)
-	}
-	return p, nil
+	return cfg, nil
 }
 
-// decodeFlexBase64 tries standard, URL, and raw variants. Some providers
-// pad inconsistently; we add padding before each attempt.
 func decodeFlexBase64(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {

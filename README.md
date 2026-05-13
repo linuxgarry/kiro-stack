@@ -8,11 +8,67 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
-| 🆕 **v2.3** | UI 缓存竞态修复 · 账号卡到期 / 重置日期 · ss/vmess 用法说明 |
+| 🆕 **v2.4** | 🔗 **链式 dial 真的实现了** · jump → node → target 三跳跑通 |
+| **v2.3** | UI 缓存竞态修复 · 账号卡到期 / 重置日期 · ss/vmess 用法说明 |
 | **v2.2** | 跳板 +ss/+vmess · 跳板「测试」按钮 · 前端正则修复 |
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🔗 v2.4 — 链式 dial 实现 / Chain dial actually works
+
+把 v2.1 ~ v2.3 一直挂着的「先跳板 → 再节点 → 再目标」做完了，可以正式从 README 里删掉那一段「未实现」的免责声明。
+
+The "jump → node → target" chain that I'd been calling out as unimplemented through v2.1-v2.3 is finally done.
+
+### 怎么做到的 / How
+
+- 不走反射、不改 mihomo 源码。**完全用 mihomo 自己已有的 `dialer-proxy` 字段**：
+  1. 解析订阅 YAML 时，把跳板配置以 `__kiro_jump__` 名字拼到 `proxies:` 列表最前
+  2. 给 **每一个真实节点** 的 config map 注入 `dialer-proxy: __kiro_jump__`
+  3. mihomo 内部的 `proxydialer.NewByName("__kiro_jump__")` 在 dial 时去 `tunnel.Proxies()` 查名字 — 所以解析完一次性 `tunnel.UpdateProxies(...)` 注册进去
+  4. 每次 jump 改变 → 自动从磁盘缓存重读订阅、重新打 stamp、重新注册，不需要重拉网络
+
+- No reflection, no mihomo patching. **All native mihomo `dialer-proxy` field**:
+  1. At subscription parse time, prepend the jump as `__kiro_jump__` in the `proxies:` list
+  2. Stamp `dialer-proxy: __kiro_jump__` onto every real node's config map
+  3. mihomo's `proxydialer.NewByName("__kiro_jump__")` resolves names through `tunnel.Proxies()` at dial time — so we call `tunnel.UpdateProxies(...)` once after each parse to register
+  4. Every jump change re-parses the cached YAML, re-stamps, re-registers — no network round-trip
+
+### 实测怎么验证的 / How I verified
+
+VPS 上 SG 出口 → 配置 jump=`trojan://...@oracleus1.adaosb.xyz:443?sni=...`（Oracle Virginia） → 给账号绑一个香港节点：
+
+| 场景 | 现象 |
+|------|------|
+| jump 清空 + 香港节点 | DNS 污染：`bepgzbgp01.114837322.xyz:14091 connect error: dial tcp 127.0.0.1:14091`（VPS 直连节点失败）|
+| jump=Oracle US + 香港节点 | `proxyName[__kiro_jump__] not found` ❌（修复前 — 缺少 tunnel 注册）|
+| 修复后：jump=Oracle US + 香港节点 | ✅ 错误消失，dial 时间从 86ms 飙到 2052ms — 这是 SG → Virginia → HK → 目标 三跳的 RTT，链生效|
+
+VPS egress is Singapore. With `jump = trojan://...@oracleus1.adaosb.xyz:443?sni=...` (Oracle Virginia) and an account bound to a Hong Kong node:
+
+| Scenario | Behavior |
+|----------|----------|
+| Jump cleared + HK node | DNS hijack: `bepgzbgp01.114837322.xyz:14091 connect error: dial tcp 127.0.0.1:14091` (VPS can't reach the HK node directly) |
+| Jump=Oracle US + HK node | `proxyName[__kiro_jump__] not found` ❌ (pre-fix, missing tunnel registration) |
+| After fix: Jump=Oracle US + HK node | ✅ Name error gone; dial time jumps from 86ms to 2052ms — that's the SG → Virginia → HK → target three-hop RTT |
+
+### ⚠️ 一个已知的二次问题 / Known follow-up
+
+链通了之后，HK 节点到 `api.ip.sb` 的 connection EOF — 是节点运营商屏蔽了那一类 ipinfo 服务，跟链路实现无关。换 `ipinfo.io / ifconfig.co` fallback 也不行（同一类服务）。后续如果要更稳的「联通性测试」，可以加一组备选 endpoint（比如 cloudflare trace），但这跟链 dial 的实现无关，先不动。
+
+After the chain came up, the HK node refuses connections to `api.ip.sb` (node provider blacklists that family of geo-info endpoints — same family as ipinfo.io / ifconfig.co, all of which fall back to each other). Not a chain-dial issue. Adding more diverse test endpoints (e.g. cloudflare trace) is its own future task.
+
+### v2.4 修改的文件 / v2.4 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/clash/jump.go` | `parseJumpURL` 拆成 `jumpConfigFor(raw, name)`（返回 mihomo 的 map[string]any 配置）+ `parseJumpURL`（包一层 `adapter.ParseProxy`），让订阅注入路径能直接拿到原始 cfg map |
+| `kiro-go/clash/manager.go` | `parseSubscription(raw, jumpRawURL)` 接受 jump 参数；jump 非空时给每个节点 config map 复制并注入 `dialer-proxy: __kiro_jump__`；`commit()` 把 jump 一起塞进 `tunnel.UpdateProxies(...)`；`SetJump` 改完热重读 cache 重新解析；预留 `__kiro_jump__` 名字防止订阅意外撞名 |
+
+> 旧版 README 在每个版本里都写「节点级链式 dial 未实现」的免责，**v2.4 起这段过期了，已从前面几个版本的章节里删除以避免误导。**
 
 ---
 
