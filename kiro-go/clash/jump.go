@@ -58,16 +58,25 @@ func jumpConfigFor(raw, name string) (map[string]any, error) {
 	}
 
 	scheme := schemeOf(raw)
+	var (
+		cfg map[string]any
+		err error
+	)
 	switch scheme {
 	case "http", "https", "socks5", "socks5h", "trojan":
-		return stdJumpConfig(raw, name)
+		cfg, err = stdJumpConfig(raw, name)
 	case "ss":
-		return ssJumpConfig(raw, name)
+		cfg, err = ssJumpConfig(raw, name)
 	case "vmess":
-		return vmessJumpConfig(raw, name)
+		cfg, err = vmessJumpConfig(raw, name)
 	default:
 		return nil, fmt.Errorf("unsupported jump scheme %q (expected http/https/socks5/trojan/ss/vmess)", scheme)
 	}
+	if err != nil || cfg == nil {
+		return cfg, err
+	}
+	hardenProxyDNS(cfg)
+	return cfg, nil
 }
 
 func schemeOf(raw string) string {

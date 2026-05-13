@@ -405,6 +405,7 @@ func parseSubscription(raw []byte, jumpRawURL string) (map[string]C.Proxy, []str
 			}
 			nodeCfg["dialer-proxy"] = jumpProxyName
 		}
+		hardenProxyDNS(nodeCfg)
 		p, err := adapter.ParseProxy(nodeCfg)
 		if err != nil {
 			// Skip unsupported / malformed nodes; do not abort the whole load.
