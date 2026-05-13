@@ -13,13 +13,14 @@ import (
 // RefreshToken 刷新 access token
 func RefreshToken(account *config.Account) (string, string, int64, error) {
 	if account.AuthMethod == "social" {
-		return refreshSocialToken(account.RefreshToken, account.ProxyURL)
+		return refreshSocialToken(account)
 	}
-	return refreshOIDCToken(account.RefreshToken, account.ClientID, account.ClientSecret, account.Region, account.ProxyURL)
+	return refreshOIDCToken(account)
 }
 
 // refreshOIDCToken IdC/Builder ID token 刷新
-func refreshOIDCToken(refreshToken, clientID, clientSecret, region, proxyURL string) (string, string, int64, error) {
+func refreshOIDCToken(account *config.Account) (string, string, int64, error) {
+	region := account.Region
 	if region == "" {
 		region = "us-east-1"
 	}
@@ -27,9 +28,9 @@ func refreshOIDCToken(refreshToken, clientID, clientSecret, region, proxyURL str
 	url := fmt.Sprintf("https://oidc.%s.amazonaws.com/token", region)
 
 	payload := map[string]string{
-		"clientId":     clientID,
-		"clientSecret": clientSecret,
-		"refreshToken": refreshToken,
+		"clientId":     account.ClientID,
+		"clientSecret": account.ClientSecret,
+		"refreshToken": account.RefreshToken,
 		"grantType":    "refresh_token",
 	}
 
@@ -37,7 +38,7 @@ func refreshOIDCToken(refreshToken, clientID, clientSecret, region, proxyURL str
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := pickClient(proxyURL)
+	client := pickClientForAccount(account)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", 0, err
@@ -64,18 +65,18 @@ func refreshOIDCToken(refreshToken, clientID, clientSecret, region, proxyURL str
 }
 
 // refreshSocialToken Social (GitHub/Google) token 刷新
-func refreshSocialToken(refreshToken, proxyURL string) (string, string, int64, error) {
+func refreshSocialToken(account *config.Account) (string, string, int64, error) {
 	url := "https://prod.us-east-1.auth.desktop.kiro.dev/refreshToken"
 
 	payload := map[string]string{
-		"refreshToken": refreshToken,
+		"refreshToken": account.RefreshToken,
 	}
 
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	client := pickClient(proxyURL)
+	client := pickClientForAccount(account)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", 0, err

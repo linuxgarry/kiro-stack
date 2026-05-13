@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -66,6 +67,9 @@ type Account struct {
 
 	// Per-account proxy (http/https/socks5 URL). Empty string = direct connection.
 	ProxyURL string `json:"proxyUrl,omitempty"`
+	// Per-account Clash node name (must exist in the loaded subscription).
+	// Takes precedence over ProxyURL when non-empty.
+	ProxyNode string `json:"proxyNode,omitempty"`
 
 	// Subscription information
 	SubscriptionType  string `json:"subscriptionType,omitempty"`  // Tier: FREE, PRO, PRO_PLUS, or POWER
@@ -111,6 +115,21 @@ type Config struct {
 
 	// Endpoint configuration: "auto", "codewhisperer", or "amazonq"
 	PreferredEndpoint string `json:"preferredEndpoint,omitempty"`
+
+	// Clash subscription (optional). When set, the server fetches the URL
+	// at startup and refresh, exposing its proxies list to the admin UI
+	// so accounts can bind to named Clash nodes.
+	ClashSubscriptionURL string `json:"clashSubscriptionUrl,omitempty"`
+
+	// GlobalOutboundProxy (optional, http/https/socks5 URL) is used as a
+	// jump host for fetching the Clash subscription. Useful on VPS where
+	// the provider blocks direct access to certain CDNs.
+	GlobalOutboundProxy string `json:"globalOutboundProxy,omitempty"`
+
+	// ModelMapping maps inbound model IDs (what callers send to /v1/messages
+	// or /v1/chat/completions) to the upstream Kiro model ID. Empty/missing
+	// keys = identity (the model name passes through unchanged).
+	ModelMapping map[string]string `json:"modelMapping,omitempty"`
 
 	// Global statistics (persisted across restarts)
 	TotalRequests         int     `json:"totalRequests,omitempty"`         // Total API requests received
@@ -468,4 +487,97 @@ func UpdatePreferredEndpoint(endpoint string) error {
 	defer cfgLock.Unlock()
 	cfg.PreferredEndpoint = endpoint
 	return Save()
+}
+
+// GetConfigPath returns the on-disk path of the active config file. Used by
+// auxiliary modules (e.g. clash) that want to persist files alongside it.
+func GetConfigPath() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	return cfgPath
+}
+
+// GetClashSubscriptionURL returns the stored Clash subscription URL.
+func GetClashSubscriptionURL() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.ClashSubscriptionURL
+}
+
+// UpdateClashSubscriptionURL sets the Clash subscription URL.
+func UpdateClashSubscriptionURL(url string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.ClashSubscriptionURL = url
+	return Save()
+}
+
+// GetGlobalOutboundProxy returns the optional jump-host proxy URL.
+func GetGlobalOutboundProxy() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GlobalOutboundProxy
+}
+
+// UpdateGlobalOutboundProxy sets the global outbound proxy URL.
+func UpdateGlobalOutboundProxy(url string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.GlobalOutboundProxy = url
+	return Save()
+}
+
+// GetModelMapping returns a snapshot copy of the model-mapping table.
+func GetModelMapping() map[string]string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil || cfg.ModelMapping == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(cfg.ModelMapping))
+	for k, v := range cfg.ModelMapping {
+		out[k] = v
+	}
+	return out
+}
+
+// UpdateModelMapping replaces the full model-mapping table.
+func UpdateModelMapping(m map[string]string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if m == nil {
+		cfg.ModelMapping = nil
+	} else {
+		cleaned := make(map[string]string, len(m))
+		for k, v := range m {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k == "" || v == "" || k == v {
+				continue // identity / empty = no-op, don't store
+			}
+			cleaned[k] = v
+		}
+		cfg.ModelMapping = cleaned
+	}
+	return Save()
+}
+
+// MapModel resolves an inbound model ID to its upstream alias.
+// Identity mapping if no entry exists (or entry points at itself).
+func MapModel(inbound string) string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil || cfg.ModelMapping == nil {
+		return inbound
+	}
+	if mapped, ok := cfg.ModelMapping[inbound]; ok && mapped != "" {
+		return mapped
+	}
+	return inbound
 }

@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"net/http"
 	"time"
@@ -20,11 +21,16 @@ var httpClient = &http.Client{
 	},
 }
 
-// pickClient 返回一个 HTTP 客户端：如果提供了 proxyURL 则走代理，
-// 否则回落到默认 httpClient。结果会按 proxyURL 缓存复用。
-func pickClient(proxyURL string) *http.Client {
-	if proxyURL == "" {
+// pickClientForAccount 按 ProxyNode → ProxyURL → 直连 的优先级返回客户端。
+// ProxyNode/ProxyURL 都为空时走默认全局 httpClient。
+func pickClientForAccount(account *config.Account) *http.Client {
+	if account == nil {
 		return httpClient
 	}
-	return config.GetAccountHTTPClient(proxyURL)
+	if account.ProxyNode == "" && account.ProxyURL == "" {
+		return httpClient
+	}
+	return clash.PickAccountClient(account)
 }
+
+

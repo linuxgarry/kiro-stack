@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"net/http"
 	"strings"
@@ -211,7 +212,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
 		req.Header.Set("Authorization", "Bearer "+account.AccessToken)
 
-		resp, err := pickKiroStreamClient(account.ProxyURL).Do(req)
+		resp, err := clash.PickAccountStreamClient(account).Do(req)
 		if err != nil {
 			lastErr = err
 			fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)

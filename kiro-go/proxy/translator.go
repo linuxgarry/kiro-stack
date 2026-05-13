@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/base64"
 	"encoding/json"
+	"kiro-api-proxy/config"
 	"regexp"
 	"strings"
 	"time"
@@ -40,7 +41,7 @@ const ThinkingModePrompt = `<thinking_mode>enabled</thinking_mode>
 func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 	lower := strings.ToLower(model)
 	thinking := false
-	
+
 	// 使用配置的后缀检查
 	suffixLower := strings.ToLower(thinkingSuffix)
 	if strings.HasSuffix(lower, suffixLower) {
@@ -48,19 +49,25 @@ func ParseModelAndThinking(model string, thinkingSuffix string) (string, bool) {
 		model = model[:len(model)-len(thinkingSuffix)]
 		lower = strings.ToLower(model)
 	}
-	
+
+	// 用户自定义映射优先（在 fallback 之前）——允许任意入站名称映射到任意上游 model
+	if mapped := config.MapModel(model); mapped != model {
+		model = mapped
+		lower = strings.ToLower(model)
+	}
+
 	// 映射模型
 	for k, v := range modelMap {
 		if strings.Contains(lower, k) {
 			return v, thinking
 		}
 	}
-	
+
 	// 如果已经是有效的 Kiro 模型，直接返回
 	if strings.HasPrefix(lower, "claude-") {
 		return model, thinking
 	}
-	
+
 	return "claude-sonnet-4.5", thinking
 }
 

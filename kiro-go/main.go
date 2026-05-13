@@ -15,6 +15,7 @@ package main
 
 import (
 	"fmt"
+	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
 	"kiro-api-proxy/proxy"
@@ -52,6 +53,13 @@ func main() {
 
 	// 初始化账号池
 	pool.GetPool()
+
+	// 预加载 Clash 订阅（如果配置了）。失败不阻塞启动——用户仍可进 UI 重试。
+	if loaded, err := clash.Init(); err != nil {
+		log.Printf("[Clash] subscription load failed: %v", err)
+	} else if loaded > 0 {
+		log.Printf("[Clash] loaded %d proxy nodes from subscription", loaded)
+	}
 
 	// 创建 HTTP 处理器（包含后台刷新任务）
 	handler := proxy.NewHandler()

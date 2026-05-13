@@ -1,11 +1,10 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
+
+RUN apk --no-cache add build-base git
 
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o kiro-api-proxy .
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o kiro-api-proxy .
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"kiro-api-proxy/auth"
+	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
 	"math/rand"
@@ -2133,6 +2134,23 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetVersion(w, r)
 	case path == "/export" && r.Method == "POST":
 		h.apiExportAccounts(w, r)
+	case path == "/clash" && r.Method == "GET":
+		h.apiGetClash(w, r)
+	case path == "/clash" && r.Method == "POST":
+		h.apiUpdateClash(w, r)
+	case path == "/clash/refresh" && r.Method == "POST":
+		h.apiRefreshClash(w, r)
+	case path == "/outbound" && r.Method == "GET":
+		h.apiGetOutbound(w, r)
+	case path == "/outbound" && r.Method == "POST":
+		h.apiUpdateOutbound(w, r)
+	case path == "/modelmapping" && r.Method == "GET":
+		h.apiGetModelMapping(w, r)
+	case path == "/modelmapping" && r.Method == "POST":
+		h.apiUpdateModelMapping(w, r)
+	case strings.HasPrefix(path, "/accounts/") && strings.HasSuffix(path, "/proxy-test") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/accounts/"), "/proxy-test")
+		h.apiTestAccountProxy(w, r, id)
 	default:
 		w.WriteHeader(404)
 		json.NewEncoder(w).Encode(map[string]string{"error": "Not Found"})
@@ -2172,6 +2190,7 @@ func (h *Handler) apiGetAccounts(w http.ResponseWriter, r *http.Request) {
 			"hasToken":          a.AccessToken != "",
 			"machineId":         a.MachineId,
 			"proxyUrl":          a.ProxyURL,
+			"proxyNode":         a.ProxyNode,
 			"subscriptionType":  a.SubscriptionType,
 			"subscriptionTitle": a.SubscriptionTitle,
 			"daysRemaining":     a.DaysRemaining,
@@ -2286,6 +2305,17 @@ func (h *Handler) apiUpdateAccount(w http.ResponseWriter, r *http.Request, id st
 			}
 		}
 		existing.ProxyURL = trimmed
+	}
+	if v, ok := updates["proxyNode"].(string); ok {
+		trimmed := strings.TrimSpace(v)
+		// Empty string = unbind (fall back to proxyUrl/direct). Non-empty
+		// must match a currently-loaded Clash node name.
+		if trimmed != "" && !clash.Default().Has(trimmed) {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "proxyNode not found in loaded Clash subscription"})
+			return
+		}
+		existing.ProxyNode = trimmed
 	}
 
 	if err := config.UpdateAccount(id, *existing); err != nil {

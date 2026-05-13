@@ -1,249 +1,120 @@
-<div align="center">
+# Fork 修改说明 / Fork Changes
 
-# Kiro Stack
+本仓库 fork 自 **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**。下面按 **从新到旧** 的顺序列出本 fork 在上游基础上做的所有改动。
 
-**将 Kiro（Amazon Q Developer）账号转为 OpenAI / Anthropic 兼容 API**
-
-基于 [kiro-gateway](https://github.com/jwadow/kiro-gateway) 与 [Kiro-Go](https://github.com/Quorinex/Kiro-Go) 二次开发
-
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat&logo=docker)](https://www.docker.com/)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-
-</div>
+This repository is forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Changes below are listed **newest first**.
 
 ---
 
-## 为什么做这个？
+## v2 — Clash 内核集成 + 全局跳板 + 紧凑 UI / Clash core integration + global jump host + compact UI
 
-原版项目各有不足：
+把 **Clash.Meta (mihomo) 内核作为 Go 库** 直接编进 `kiro-go`，单容器同时跑「API 网关」+「Clash 客户端」。账号可以在网页上一键绑定订阅里的任意节点（ss / vmess / vless / trojan / hysteria2 / tuic 等），不再受限于 http/socks5。
 
-| | [kiro-gateway](https://github.com/jwadow/kiro-gateway) | [Kiro-Go](https://github.com/Quorinex/Kiro-Go) |
-|---|---|---|
-| Web 管理面板 | ❌ 无 | ✅ 有 |
-| 请求稳定性 | ✅ 强（多重 retry、双端点 fallback） | ⚠️ 一般 |
-| 多账号池 | ⚠️ 基础 | ✅ 完善（轮询 + 权重） |
-| Token 自动刷新 | ✅ | ✅ |
+Embeds the **Clash.Meta (mihomo) core as a Go library** so a single `kiro-go` container is *both* the API gateway *and* the Clash client. Accounts can bind to any node from a Clash subscription (ss / vmess / vless / trojan / hysteria2 / tuic, etc.), not just http/socks5.
 
-**本项目将两者结合：**
-- **kiro-go** 负责 Web 管理面板 + 账号池管理
-- **kiro-gateway** 负责底层 API 调用（重试、双端点 fallback、错误处理）
-- kiro-go 检测到 `KIRO_GATEWAY_BASE` 后，自动将请求转发给 kiro-gateway 执行
-
----
-
-## 架构
+### 一图看懂 / What it looks like
 
 ```
-客户端 (Claude Code / Cursor / Cline ...)
-        │
-        ▼  :8088
-   ┌─────────────┐
-   │   kiro-go   │  Web 管理面板 + 账号池 + Token 刷新
-   └──────┬──────┘
-          │ (内部转发)
-          ▼  :8001
-   ┌──────────────────┐
-   │   kiro-gateway   │  稳定代理层：双端点 fallback + 自动重试
-   └──────┬───────────┘
-          │
-          ▼
-      Kiro API (AWS CodeWhisperer / Amazon Q)
+┌─ Clash 订阅（全局）─────────────────────────────────┐
+│ 订阅 URL: [https://...]                  [刷新] [保存并加载] │
+│ 已加载 90 个节点 · 更新于 2026/05/13 18:04:15        │
+└──────────────────────────────────────────────────────┘
+账号卡片 (3 列网格)
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ li***@gm***.com     │ │ sa***@ou***.com     │ │ mu***@be***.com     │
+│ PRO Google 正常     │ │ PRO Google 正常     │ │ PRO Google 正常     │
+│ ████████░ 80% / 26m │ │ ░░░░░░░░░ 1% / 58m  │ │ ░░░░░░░░░ 0% / 34m  │
+│ 代理: [🇺🇸 US-01 ▼][测试]│ │ 代理: [🇯🇵 JP-01 ▼][测试]│ │ 代理: [直连 ▼][测试]    │
+│ 权重: [100][保存]   │ │ 权重: [100][保存]   │ │ 权重: [100][保存]   │
+└─────────────────────┘ └─────────────────────┘ └─────────────────────┘
 ```
 
----
+### 新增功能 / New features
 
-## 快速开始
+1. **Clash 订阅（全局）** — 首页面板填订阅 URL → 后端调 mihomo 解析 YAML（自动识别 base64 包装）→ 节点名暴露给账号下拉。订阅 YAML 在第一次成功加载时**写入本地缓存**（`data/clash-cache.yaml`），重启或刷新页面后**先用缓存**渲染，再后台异步重新拉取——网络抖动不会让你「页面一刷就空」。
 
-### 前置条件
+2. **每账号绑定节点** — 账号卡片的「代理」下拉直接列出全部节点 + 「直连」。1:1 绑定，状态明确；账号绑定的节点如果在新一轮订阅里不存在了，下拉里仍然保留并标记 `(missing)` 而不是悄悄回退到直连。
 
-- Docker + Docker Compose
-- Kiro 账号（免费 / 付费均可）
+3. **每账号联通性测试** — 「测试」按钮发一次到 `ipinfo.io / ifconfig.co / ip.sb` 的请求（依次 fallback），按当前账号配置走 Clash 节点 / proxyUrl / 直连，把出口 IP、国家、城市、ASN、延迟、模式（`clash` / `proxyUrl` / `direct`）原地显示在卡片上。肉眼一秒确认走的是哪。
 
-### 三步启动
+4. **全局跳板代理（订阅拉取）** — 当 VPS 直连屏蔽订阅 CDN（比如某些机场要走特定区域）时，可以在「设置」里填一个 http(s)/socks5 跳板，订阅拉取专走它，不影响账号自身代理。
 
-```bash
-# 1. 克隆仓库
-git clone https://github.com/your-username/kiro-stack.git
-cd kiro-stack
+5. **响应式 3 列账号网格** — 账号卡片从「一行一个」改成 `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))`，桌面端能看到 3-4 个账号，800px 以下回退到单列。每张卡也精简了一遍：进度条和到期时间合并、状态条合并到 footer 一行。
 
-# 2. 配置环境变量
-cp .env.example .env
-# 编辑 .env，修改以下两项：
-#   ADMIN_PASSWORD=你的管理面板密码
-#   INTERNAL_API_KEY=随机生成的密钥（用于内部通信）
+6. **模型映射** — 设置页可以编辑「入站 model 名 → 上游 Kiro model 名」映射表（默认空表 = 透传，与上游行为一致）。⚠️ 截至本次提交，运行时映射在 `INVALID_MODEL_ID` 这条路径上还没完全生效，PR 欢迎；写盘 / API / UI 均已完成。
 
-# 3. 启动服务
-docker compose up -d
-```
+7. **`/v1/messages` 兼容性副作用：账号代理（v1）继续可用**，并且现在会按「Clash 节点 → proxyUrl → 直连」的顺序解析。
 
-### 添加账号并使用
+### 新增端点 / New admin endpoints
 
-1. 打开 `http://localhost:8088/admin`
-2. 使用 `ADMIN_PASSWORD` 登录
-3. 添加 Kiro 账号（支持 AWS Builder ID / IAM SSO / SSO Token 等方式）
-4. 将客户端的 base URL 设为 `http://localhost:8088`
-
-```bash
-# OpenAI 兼容
-curl http://localhost:8088/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-4.5", "messages": [{"role": "user", "content": "Hello"}]}'
-
-# Anthropic 兼容
-curl http://localhost:8088/v1/messages \
-  -H "Content-Type: application/json" \
-  -d '{"model": "claude-sonnet-4.5", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello"}]}'
-```
-
-> **说明：** 账号凭证由 kiro-go 管理，请求时自动转发给 kiro-gateway，无需在 gateway 单独配置 token。
-
----
-
-## 支持的模型
-
-模型可用性取决于你的 Kiro 订阅等级，以下为常见模型：
-
-| 模型 | 说明 |
+| 端点 | 用途 |
 |------|------|
-| `claude-sonnet-4.6` | 最新旗舰模型（2026年2月发布） |
-| `claude-opus-4.6` | 最强推理模型（2026年2月发布） |
-| `claude-sonnet-4.5` | 均衡性能，适合编程、写作等通用任务 |
-| `claude-haiku-4.5` | 极速响应，适合简单任务 |
-| `claude-sonnet-4` | 上一代，稳定可靠 |
-| `claude-3.7-sonnet` | 旧版，向后兼容 |
-| `deepseek-v3.2` | 开源 MoE（685B/37B active），均衡 |
-| `minimax-m2.1` | 开源 MoE（230B/10B active），适合复杂任务 |
-| `qwen3-coder-next` | 开源 MoE（80B/3B active），代码专项 |
+| `GET  /admin/api/clash` | 订阅状态、节点名列表、最近一次拉取时间、错误信息 |
+| `POST /admin/api/clash` | 设置/清除订阅 URL（`{"subscriptionUrl": "..."}`），同步触发一次拉取 |
+| `POST /admin/api/clash/refresh` | 重新拉取已配置的订阅 |
+| `POST /admin/api/accounts/:id/proxy-test` | 触发该账号的联通性 + Geo 测试 |
+| `GET  /admin/api/outbound` | 全局跳板代理 URL |
+| `POST /admin/api/outbound` | 设置全局跳板代理（`{"url":"http://..."}`） |
+| `GET  /admin/api/modelmapping` | 当前映射表（flat `{from: to}`） |
+| `POST /admin/api/modelmapping` | 替换整个映射表 |
+| `PUT  /admin/api/accounts/:id` | 增加 `proxyNode` 字段（绑定到 Clash 节点名） |
 
-模型名称支持多种格式，如 `claude-sonnet-4.5` / `claude-sonnet-4-5` / `claude-sonnet-4-5-20250929` 均可正常解析。
+### 修改的文件 / Files changed
 
-> **⚠️ 关于 `claude-sonnet-4.6` / `claude-opus-4.6` 无法使用的说明**
->
-> 这两个模型目前处于**小范围灰度开放**阶段，Kiro API 对无权限的请求会返回 HTTP 429，
-> 与普通「限流」使用相同的状态码，因此日志中会看到 `Streaming failed after 3 attempts` 的报错。
->
-> **原因并非代码 Bug，而是你的 Kiro 账号/Region 尚未获得该模型的访问权限。**
->
-> 排查步骤：
-> 1. 先用 `claude-sonnet-4.5` 发一条测试请求，若成功则账号和链路均正常
-> 2. 等待 AWS 对你的账号开放 4.6 模型（通常随 Kiro IDE 版本升级逐步推送）
-> 3. 开放后无需任何配置变更，直接使用即可
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/clash/manager.go` (**新**) | mihomo 适配器：订阅拉取、YAML 解析、base64 兼容、节点 registry、本地缓存 |
+| `kiro-go/clash/dial.go` (**新**) | 把 mihomo 的 `proxy.DialContext` 包装成 `http.Transport.DialContext`；按 (节点, 超时, 订阅 generation) 缓存 `*http.Client` |
+| `kiro-go/clash/account.go` (**新**) | 解析顺序：`ProxyNode → ProxyURL → 直连`；短/长两种超时的 picker |
+| `kiro-go/proxy/clash_handlers.go` (**新**) | 上面所有 admin 端点的实现，含联通性测试 + Geo 解析（兼容 ipinfo/ifconfig.co/ip.sb 三种字段） |
+| `kiro-go/config/config.go` | 新增 `Account.ProxyNode`、`Config.ClashSubscriptionURL`、`Config.GlobalOutboundProxy`、`Config.ModelMapping`；对应 getter/setter；`MapModel(string)` |
+| `kiro-go/auth/http_client.go` | `pickClientForAccount(*Account)`：根据 ProxyNode/ProxyURL 选客户端 |
+| `kiro-go/auth/oidc.go` | `RefreshToken` 改签名，接收整个 `*Account` 并走 `pickClientForAccount` |
+| `kiro-go/proxy/kiro.go` | 流式调用改用 `clash.PickAccountStreamClient(account)` |
+| `kiro-go/proxy/kiro_api.go` | `GetUsageLimits` / `GetUserInfo` / `ListAvailableModels` 改用 `clash.PickAccountClient(account)` |
+| `kiro-go/proxy/handler.go` | `apiUpdateAccount` 接受 `proxyNode` 字段（校验是否在订阅里）；`apiGetAccounts` 返回 `proxyNode`；新路由全部接到 mux |
+| `kiro-go/proxy/translator.go` | `ParseModelAndThinking` 在 thinking-后缀剥离之后插一次 `config.MapModel`，让用户自定义优先 |
+| `kiro-go/main.go` | 启动时调用 `clash.Init()`：先读缓存、再后台重拉 |
+| `kiro-go/go.mod` | 升到 Go 1.22；新增依赖 `github.com/metacubex/mihomo v1.19.24`、`gopkg.in/yaml.v3` |
+| `kiro-go/Dockerfile` | 升到 `golang:1.22-alpine`；加 `build-base git`（mihomo 部分包要 cgo 头文件）；`go mod tidy` 自动拉 mihomo 依赖 |
+| `kiro-go/web/index.html` | 首页订阅卡片 + 设置页跳板 / 模型映射；3 列响应式网格；i18n（中/英） |
 
----
+### 兼容性 / Compatibility
 
-## 配置说明
-
-### 环境变量（.env 文件）
-
-所有配置都在根目录的 `.env` 文件中：
-
-| 变量 | 说明 | 必填 |
-|------|------|------|
-| `ADMIN_PASSWORD` | Web 管理面板密码 | ✅ 是 |
-| `INTERNAL_API_KEY` | kiro-go 和 kiro-gateway 之间的通信密钥 | ✅ 是 |
-| `VPN_PROXY_URL` | HTTP/SOCKS5 代理（如有网络限制） | ❌ 否 |
-| `DEBUG_MODE` | 调试模式：`off`（默认）/ `errors` / `all` | ❌ 否 |
-
-**说明：**
-- `ADMIN_PASSWORD`：用于登录 Web 管理面板
-- `INTERNAL_API_KEY`：两个服务之间的内部鉴权，随机生成即可（如 `openssl rand -hex 32`）
-- `VPN_PROXY_URL`：如果在中国或有网络限制，配置代理地址（如 `http://127.0.0.1:7890`）
-- `DEBUG_MODE`：生产环境建议 `off`，排查问题时可设为 `errors`
-
-### 账号管理
-
-所有 Kiro 账号通过 Web 管理面板添加和管理：
-1. 访问 `http://localhost:8088/admin`
-2. 使用 `ADMIN_PASSWORD` 登录
-3. 点击"添加账号"，支持多种方式：
-   - AWS Builder ID（个人账号）
-   - IAM Identity Center（企业 SSO）
-   - SSO Token（从浏览器导入）
-   - 本地缓存（从 Kiro IDE 导入）
-
-**无需在 kiro-gateway 配置 token**，所有账号凭证由 kiro-go 管理，请求时自动转发。
+- **完全向后兼容**：旧 `config.json` 里没有 `proxyNode` / `clashSubscriptionUrl` / `globalOutboundProxy` / `modelMapping` 时全部当空处理，行为与上游一致。
+- 镜像体积：~10MB → ~37MB（mihomo 内核 + 加密库）；常驻内存增加约 5MB。
+- 第一次构建会拉一堆 Go 模块，时间 3-5 分钟；之后被 Docker layer 缓存后秒级。
 
 ---
 
-## 目录结构
+## v1 — 单账号 HTTP/SOCKS5 代理 / Per-account HTTP/SOCKS5 proxy
 
-```
-kiro-stack/
-├── docker-compose.yml        # 整合启动配置
-├── kiro-gateway/             # Python/FastAPI 稳定代理层
-│   ├── kiro/                 # 核心代码
-│   ├── requirements.txt
-│   └── README.md
-├── kiro-go/                  # Go Web 管理面板 + 账号池
-│   ├── proxy/                # 核心代理逻辑
-│   ├── web/index.html        # 管理面板前端
-│   ├── data/
-│   │   └── config.example.json  # 配置模板
-│   └── README.md
-└── scripts/
-    └── sync_tokens.py        # Token 同步脚本
-```
+为 `kiro-go` 里的每个账号单独设置 HTTP / HTTPS / SOCKS5 代理：
 
----
+- 在 Admin Web UI 的账号详情弹窗里，「机器码」下方新增「账号代理」一栏
+- 支持 `http://host:port`、`https://host:port`、`socks5://host:port`（以及 `socks5h://`）
+- 留空 = 该账号走直连（默认行为保持不变）
+- 代理作用于该账号的所有出站 HTTP（token 刷新 / usage / user-info / models / 流式 generateAssistantResponse）
 
-## 更新日志
+Per-account HTTP / HTTPS / SOCKS5 proxy for every account in `kiro-go`. Leave empty for direct (default unchanged).
 
-### `feature/simplify-config-and-add-4.6-models`
+### v1 修改的文件 / v1 files changed
 
-**配置简化：**
-- 整合部署只需配置**根目录一个 `.env` 文件**，不再需要单独维护 `kiro-gateway/.env`
-- 账号凭证（Refresh Token 等）完全通过 kiro-go Web 管理面板管理，kiro-go 转发请求时自动通过 `X-Kiro-*` HTTP 头传递给 gateway
-- `kiro-gateway/.env.example` 更新注释，明确标注仅独立部署时才需要此文件
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/config/config.go` | `Account` 新增 `ProxyURL` (JSON `proxyUrl`) |
+| `kiro-go/config/httpclient.go` | **新增**：按代理 URL 缓存的 `*http.Client` 工厂 |
+| `kiro-go/auth/oidc.go` | `RefreshToken` 系列接收并使用 `account.ProxyURL` |
+| `kiro-go/proxy/kiro_api.go` | usage / user-info / models 走账号代理 |
+| `kiro-go/proxy/kiro.go` | 流式调用走账号代理 |
+| `kiro-go/proxy/handler.go` | `apiUpdateAccount` 接受 `proxyUrl`；`apiGetAccounts` 返回 `proxyUrl` |
+| `kiro-go/web/index.html` | 账号详情弹窗新增代理输入 / 保存 / 直连按钮 |
 
-**新增模型支持：**
-- 在 gateway 内置 fallback 模型列表中添加 `claude-sonnet-4.6`、`claude-opus-4.6`、`claude-opus-4.6-1m`
-
-**集成模式启动修复：**
-- 新增 `SKIP_STARTUP_CREDENTIAL_CHECK=true` 环境变量（已在 `docker-compose.yml` 中预设）
-- 修复集成部署时 kiro-gateway 因找不到本地静态凭证而无法启动的问题（凭证由请求头动态传入，无需启动时校验）
-
-**日志改进：**
-- 429 错误日志现在会附带 Kiro API 返回的响应体，便于判断是真正限流还是模型无权限
+> v2 的 Clash 集成在 v1 基础之上层叠：账号绑定 Clash 节点时优先走节点；没绑或节点已不在订阅里时，回落到 v1 的 `proxyUrl`；都为空才直连。
 
 ---
 
-### 相比原版的改动
+## License
 
-**kiro-go 改动：**
-- 新增 `KIRO_GATEWAY_BASE` / `KIRO_GATEWAY_API_KEY` 支持，将请求通过 kiro-gateway 中转，大幅提升稳定性
-- Web 管理面板优化
-
-**kiro-gateway 改动：**
-- 适配与 kiro-go 的联合部署场景
-
----
-
-## 免责声明
-
-> ⚠️ **请在使用前仔细阅读**
-
-- **账号封禁风险**：使用本项目调用 Kiro API 存在账号被封禁或限流的风险。Kiro / Amazon Q Developer 的服务条款可能不允许此类第三方代理访问，后果由用户自行承担。
-- **本项目定位**：本项目仅为对 [kiro-gateway](https://github.com/jwadow/kiro-gateway) 与 [Kiro-Go](https://github.com/Quorinex/Kiro-Go) 的整合与二次开发，**不涉及任何底层请求逻辑的编写**。所有与 Kiro API 的实际通信逻辑均来自上述原始项目。
-- **非官方项目**：本项目与 Amazon、AWS、Kiro 官方无任何关联。
-- **仅供学习研究**：请勿将本项目用于商业用途或大规模滥用 API。
-
----
-
-## 致谢
-
-本项目基于以下优秀开源项目二次开发：
-
-- **[kiro-gateway](https://github.com/jwadow/kiro-gateway)** by [@Jwadow](https://github.com/jwadow) — AGPL-3.0
-- **[Kiro-Go](https://github.com/Quorinex/Kiro-Go)** by [@Quorinex](https://github.com/Quorinex) — MIT
-
----
-
-## 许可证
-
-本项目遵循各子项目原有许可证：
-- `kiro-gateway/` — [AGPL-3.0](kiro-gateway/LICENSE)
-- `kiro-go/` — [MIT](kiro-go/LICENSE) *(如原项目有)*
-
-整合部分代码遵循 MIT 许可证。
+本 fork 继承上游的 license。所有新增和修改都属于对上游项目的增强。
+This fork inherits the upstream license. All additions are enhancements on top of the upstream project.
