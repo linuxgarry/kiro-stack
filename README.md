@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6** | 🛡️ DNSGuard 抗污染 · Clash 节点失败自动回退到全局跳板 · 熔断管理标签页 |
 | 🆕 **v2.5** | 测试接口下拉框（含 geosurf / Kiro 直测）· 「联通」改为「连接成功」|
 | **v2.4** | 🔗 **链式 dial 真的实现了** · jump → node → target 三跳跑通 |
 | **v2.3** | UI 缓存竞态修复 · 账号卡到期 / 重置日期 · ss/vmess 用法说明 |
@@ -15,6 +16,61 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🛡️ v2.6 — DNSGuard 抗污染 + 失败回退 + 熔断管理 / DNSGuard + fallback + circuit breaker
+
+这一版专门处理 VPS / 跳板机 / 订阅节点域名被污染时的稳定性问题。目标是：下次在别的机器上安装时，不需要再手工改 hosts 或临时猜测哪里被污染，程序自己先做干净解析、链路失败时再自动兜底。
+
+This release hardens VPS installs where either subscription node domains or the jump-host domain can be poisoned. The app now tries clean resolution first, then falls back automatically when a Clash node path still fails.
+
+### 加了什么 / New
+
+- **DNSGuard 抗污染解析**：Clash 订阅节点和全局跳板都会先检查系统 DNS 结果；如果解析到 `127.0.0.1`、内网、链路本地、组播等明显污染地址，会改用 Cloudflare / Google DoH 解析。
+- **DoH bootstrap**：DoH 客户端不会再依赖系统 DNS 解析 `cloudflare-dns.com` / `dns.google`，而是直连 `1.1.1.1` / `8.8.8.8`，避免“连 DoH 域名也被污染”的二次问题。
+- **保留 SNI/ServerName**：当节点或跳板域名被改写为干净 IP 时，原域名会保存在 `sni` / `servername` / `server-name`，TLS 仍按原域名握手。
+- **Clash 节点运行时回退**：账号绑定 Clash 节点后，如果请求出现 `EOF`、timeout、connection reset/refused 等链路错误，会自动重试一次：优先走账号 `proxyUrl`，否则走全局跳板。
+- **熔断管理标签页**：后台新增「熔断」tab，可配置失败阈值、错误率窗口、打开时长、半开恢复次数，并能手动熔断/解除单个账号。
+
+- **DNSGuard** checks Clash subscription nodes and global jump hosts. If system DNS returns loopback/private/link-local/multicast addresses, it resolves through Cloudflare / Google DoH.
+- **DoH bootstrap** dials `1.1.1.1` / `8.8.8.8` directly for the DoH providers, so a poisoned resolver cannot poison the resolver lookup itself.
+- **SNI is preserved** when a proxy server hostname is rewritten to a clean IP.
+- **Runtime fallback** retries failed Clash-node requests once through per-account `proxyUrl`, then the global jump.
+- **Circuit Breaker tab** adds configurable account-level isolation and manual open/close controls.
+
+### 本次 VPS 实测 / Verified on VPS
+
+| 项目 | 结果 |
+|------|------|
+| 全局跳板 `trojan://...@oracleus1.adaosb.xyz:443?sni=...` | ✅ DNSGuard 将域名改写为干净 IP，同时保留 SNI；`Kiro API (codewhisperer)` 直测成功 |
+| 订阅节点域名 `*.114837322.xyz` | 系统 DNS 返回 `127.0.0.1`，DNSGuard 识别为污染；公共 DoH 对这批域名没有返回可用 A 记录 |
+| 账号绑定污染节点后测试 Kiro | ✅ Clash 节点失败后自动回退全局跳板，Kiro 直测成功 |
+| HTTP 跳板 `http://admin:...@100.98.245.39:3128` | 可访问部分 geo 接口，但对 Kiro CONNECT 后 TLS 超时；程序保留错误提示，建议继续用 trojan 跳板 |
+
+> 注意：如果一个机场节点域名在公共 DoH 上也没有任何可用 A 记录，程序无法凭空知道真实 IP。这种情况下 v2.6 的正确策略是：识别污染 → 不信任坏地址 → 运行时回退到可用全局跳板，保证 Kiro API 测试和业务调用继续工作。
+
+### 新增 API / New APIs
+
+| API | 用途 |
+|-----|------|
+| `GET /admin/api/breaker` | 获取熔断配置和账号熔断状态 |
+| `POST /admin/api/breaker` | 更新熔断配置 |
+| `POST /admin/api/breaker/accounts/:id/open` | 手动熔断账号 |
+| `POST /admin/api/breaker/accounts/:id/close` | 解除账号熔断并清除短冷却 |
+
+### v2.6 修改的文件 / v2.6 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/clash/dns.go` | 新增 DNSGuard：污染地址检测、DoH 查询、DoH bootstrap、SNI 保留 |
+| `kiro-go/clash/jump.go` | 全局跳板解析时接入 DNSGuard |
+| `kiro-go/clash/manager.go` | 订阅节点解析时接入 DNSGuard |
+| `kiro-go/clash/account.go` | Clash 节点请求失败后自动回退账号代理/全局跳板 |
+| `kiro-go/config/config.go` | 新增 `CircuitBreakerConfig` 和持久化配置 |
+| `kiro-go/pool/account.go` | 新增账号级 closed/open/half-open 熔断状态、错误率窗口、手动开关 |
+| `kiro-go/proxy/handler.go` | 新增 `/admin/api/breaker` 管理 API |
+| `kiro-go/web/index.html` | 新增「熔断」标签页、配置表单和账号状态卡片 |
 
 ---
 

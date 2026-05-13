@@ -101,12 +101,12 @@ type Account struct {
 // Config represents the global application configuration.
 type Config struct {
 	// Server settings
-	Password      string    `json:"password"`      // Admin panel password
-	Port          int       `json:"port"`          // HTTP server port (default: 8080)
-	Host          string    `json:"host"`          // HTTP server bind address (default: 0.0.0.0)
-	ApiKey        string    `json:"apiKey,omitempty"`        // API key for client authentication
-	RequireApiKey bool      `json:"requireApiKey"` // Whether to enforce API key validation
-	Accounts      []Account `json:"accounts"`      // Registered Kiro accounts
+	Password      string    `json:"password"`         // Admin panel password
+	Port          int       `json:"port"`             // HTTP server port (default: 8080)
+	Host          string    `json:"host"`             // HTTP server bind address (default: 0.0.0.0)
+	ApiKey        string    `json:"apiKey,omitempty"` // API key for client authentication
+	RequireApiKey bool      `json:"requireApiKey"`    // Whether to enforce API key validation
+	Accounts      []Account `json:"accounts"`         // Registered Kiro accounts
 
 	// Thinking mode configuration for extended reasoning output
 	ThinkingSuffix       string `json:"thinkingSuffix,omitempty"`       // Model suffix to trigger thinking mode (default: "-thinking")
@@ -126,6 +126,10 @@ type Config struct {
 	// the provider blocks direct access to certain CDNs.
 	GlobalOutboundProxy string `json:"globalOutboundProxy,omitempty"`
 
+	// CircuitBreaker controls account-level failure isolation. It sits on
+	// top of the older short cooldown behavior and is managed from the admin UI.
+	CircuitBreaker CircuitBreakerConfig `json:"circuitBreaker,omitempty"`
+
 	// ModelMapping maps inbound model IDs (what callers send to /v1/messages
 	// or /v1/chat/completions) to the upstream Kiro model ID. Empty/missing
 	// keys = identity (the model name passes through unchanged).
@@ -139,6 +143,55 @@ type Config struct {
 	TotalRetries          int     `json:"totalRetries,omitempty"`          // Total retries count (sum of attempts-1)
 	TotalTokens           int     `json:"totalTokens,omitempty"`           // Total tokens processed
 	TotalCredits          float64 `json:"totalCredits,omitempty"`          // Total credits consumed
+}
+
+// CircuitBreakerConfig controls account-level circuit breaking.
+type CircuitBreakerConfig struct {
+	Enabled            bool    `json:"enabled"`
+	FailureThreshold   int     `json:"failureThreshold"`
+	FailureWindowSec   int     `json:"failureWindowSec"`
+	OpenDurationSec    int     `json:"openDurationSec"`
+	HalfOpenMaxSuccess int     `json:"halfOpenMaxSuccess"`
+	ErrorRateThreshold float64 `json:"errorRateThreshold"`
+	ErrorRateMinReqs   int     `json:"errorRateMinReqs"`
+}
+
+func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
+	return CircuitBreakerConfig{
+		Enabled:            true,
+		FailureThreshold:   3,
+		FailureWindowSec:   300,
+		OpenDurationSec:    300,
+		HalfOpenMaxSuccess: 5,
+		ErrorRateThreshold: 0.8,
+		ErrorRateMinReqs:   5,
+	}
+}
+
+func normalizeCircuitBreakerConfig(c CircuitBreakerConfig) CircuitBreakerConfig {
+	def := DefaultCircuitBreakerConfig()
+	if c == (CircuitBreakerConfig{}) {
+		return def
+	}
+	if c.FailureThreshold <= 0 {
+		c.FailureThreshold = def.FailureThreshold
+	}
+	if c.FailureWindowSec <= 0 {
+		c.FailureWindowSec = def.FailureWindowSec
+	}
+	if c.OpenDurationSec <= 0 {
+		c.OpenDurationSec = def.OpenDurationSec
+	}
+	if c.HalfOpenMaxSuccess <= 0 {
+		c.HalfOpenMaxSuccess = def.HalfOpenMaxSuccess
+	}
+	if c.ErrorRateThreshold <= 0 || c.ErrorRateThreshold > 1 {
+		c.ErrorRateThreshold = def.ErrorRateThreshold
+	}
+	if c.ErrorRateMinReqs <= 0 {
+		c.ErrorRateMinReqs = def.ErrorRateMinReqs
+	}
+	return c
 }
 
 // AccountInfo contains account metadata retrieved from Kiro API.
@@ -162,7 +215,7 @@ type AccountInfo struct {
 }
 
 // Version 当前版本号
-const Version = "1.0.2"
+const Version = "2.6.0"
 
 var (
 	cfg     *Config
@@ -187,11 +240,12 @@ func Load() error {
 			// Create default configuration.
 			// Binds to 0.0.0.0 by default for Docker/container compatibility.
 			cfg = &Config{
-				Password:      "changeme",
-				Port:          8080,
-				Host:          "0.0.0.0",
-				RequireApiKey: false,
-				Accounts:      []Account{},
+				Password:       "changeme",
+				Port:           8080,
+				Host:           "0.0.0.0",
+				RequireApiKey:  false,
+				Accounts:       []Account{},
+				CircuitBreaker: DefaultCircuitBreakerConfig(),
 			}
 			return Save()
 		}
@@ -209,6 +263,11 @@ func Load() error {
 		if old != c.Accounts[i].Weight {
 			changed = true
 		}
+	}
+	normalizedBreaker := normalizeCircuitBreakerConfig(c.CircuitBreaker)
+	if normalizedBreaker != c.CircuitBreaker {
+		c.CircuitBreaker = normalizedBreaker
+		changed = true
 	}
 	cfg = &c
 	if changed {
@@ -530,6 +589,24 @@ func UpdateGlobalOutboundProxy(url string) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	cfg.GlobalOutboundProxy = url
+	return Save()
+}
+
+// GetCircuitBreakerConfig returns normalized circuit-breaker settings.
+func GetCircuitBreakerConfig() CircuitBreakerConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return DefaultCircuitBreakerConfig()
+	}
+	return normalizeCircuitBreakerConfig(cfg.CircuitBreaker)
+}
+
+// UpdateCircuitBreakerConfig persists normalized circuit-breaker settings.
+func UpdateCircuitBreakerConfig(in CircuitBreakerConfig) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.CircuitBreaker = normalizeCircuitBreakerConfig(in)
 	return Save()
 }
 

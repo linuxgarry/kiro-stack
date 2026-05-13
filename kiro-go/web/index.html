@@ -397,6 +397,110 @@
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
         }
 
+        .breaker-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+        }
+
+        .breaker-notice {
+            background: #eef2ff;
+            border: 1px solid #c7d2fe;
+            color: #3730a3;
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 13px;
+            margin-bottom: 14px;
+        }
+
+        .breaker-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .breaker-field small {
+            display: block;
+            color: #64748b;
+            font-size: 12px;
+            line-height: 1.45;
+            margin-top: 4px;
+        }
+
+        .breaker-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+
+        .breaker-account-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 14px;
+        }
+
+        .breaker-account {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 14px;
+            background: #fff;
+        }
+
+        .breaker-account-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .breaker-account-name {
+            font-weight: 650;
+            overflow-wrap: anywhere;
+        }
+
+        .breaker-kv {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 12px;
+            color: #475569;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+
+        .breaker-kv strong {
+            color: #1e293b;
+            font-weight: 650;
+        }
+
+        .breaker-progress {
+            height: 7px;
+            border-radius: 999px;
+            background: #e2e8f0;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+
+        .breaker-progress span {
+            display: block;
+            height: 100%;
+            background: #22c55e;
+        }
+
+        .breaker-progress span.warn {
+            background: #f59e0b;
+        }
+
+        .breaker-progress span.danger {
+            background: #ef4444;
+        }
+
         /* 请求日志样式 */
         .log-item {
             background: #fff;
@@ -900,6 +1004,12 @@
             .machine-id-row .btn {
                 width: 100%;
             }
+
+            .breaker-grid,
+            .breaker-account-grid,
+            .breaker-kv {
+                grid-template-columns: 1fr;
+            }
         }
 
         @media (min-width: 641px) {
@@ -997,6 +1107,7 @@
         <div class="tabs">
             <div class="tab active" data-tab="accounts" data-i18n="tabs.accounts"></div>
             <div class="tab" data-tab="logs" data-i18n="tabs.logs">请求日志</div>
+            <div class="tab" data-tab="breaker" data-i18n="tabs.breaker"></div>
             <div class="tab" data-tab="settings" data-i18n="tabs.settings"></div>
             <div class="tab" data-tab="api" data-i18n="tabs.api"></div>
         </div>
@@ -1040,6 +1151,44 @@
                     <button class="btn btn-sm btn-secondary" onclick="loadLogs()">刷新</button>
                 </div>
                 <div id="logsList"></div>
+            </div>
+        </div>
+        <div id="tabBreaker" class="tab-content hidden">
+            <div class="breaker-toolbar">
+                <h2 style="font-size:20px;margin:0" data-i18n="breaker.title"></h2>
+                <button class="btn btn-primary" onclick="loadBreaker()" data-i18n="breaker.refresh"></button>
+            </div>
+            <div class="breaker-notice" data-i18n="breaker.notice"></div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title" data-i18n="breaker.settings"></span>
+                    <label style="display:flex;align-items:center;gap:10px;margin:0">
+                        <span data-i18n="breaker.switch"></span>
+                        <label class="switch" style="margin:0">
+                            <input type="checkbox" id="breakerEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </label>
+                </div>
+                <div class="breaker-grid">
+                    <div class="breaker-field"><label data-i18n="breaker.failureThreshold"></label><input id="breakerFailureThreshold" type="number" min="1"><small data-i18n="breaker.failureThresholdHint"></small></div>
+                    <div class="breaker-field"><label data-i18n="breaker.failureWindowSec"></label><input id="breakerFailureWindowSec" type="number" min="1"><small data-i18n="breaker.failureWindowSecHint"></small></div>
+                    <div class="breaker-field"><label data-i18n="breaker.openDurationSec"></label><input id="breakerOpenDurationSec" type="number" min="1"><small data-i18n="breaker.openDurationSecHint"></small></div>
+                    <div class="breaker-field"><label data-i18n="breaker.halfOpenMaxSuccess"></label><input id="breakerHalfOpenMaxSuccess" type="number" min="1"><small data-i18n="breaker.halfOpenMaxSuccessHint"></small></div>
+                    <div class="breaker-field"><label data-i18n="breaker.errorRateThreshold"></label><input id="breakerErrorRateThreshold" type="number" min="0.01" max="1" step="0.01"><small data-i18n="breaker.errorRateThresholdHint"></small></div>
+                    <div class="breaker-field"><label data-i18n="breaker.errorRateMinReqs"></label><input id="breakerErrorRateMinReqs" type="number" min="1"><small data-i18n="breaker.errorRateMinReqsHint"></small></div>
+                </div>
+                <div class="breaker-actions">
+                    <button class="btn btn-primary" onclick="saveBreaker()" data-i18n="common.save"></button>
+                    <span id="breakerSaveResult" style="font-size:12px;color:#64748b"></span>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title" data-i18n="breaker.accounts"></span>
+                    <span id="breakerSummary" style="font-size:12px;color:#64748b"></span>
+                </div>
+                <div id="breakerAccounts" class="breaker-account-grid"></div>
             </div>
         </div>
         <div id="tabSettings" class="tab-content hidden">
@@ -1201,8 +1350,39 @@
                 'stats.retries': '重试次数',
                 'tabs.accounts': '账号',
                 'tabs.logs': '日志',
+                'tabs.breaker': '熔断',
                 'tabs.settings': '设置',
                 'tabs.api': 'API',
+                'breaker.title': '熔断管理',
+                'breaker.refresh': '刷新',
+                'breaker.notice': '账号级熔断会在连续失败、配额异常或错误率过高时临时摘除账号，避免坏节点/污染链路拖垮全局测试。',
+                'breaker.settings': '熔断参数',
+                'breaker.switch': '熔断器开关',
+                'breaker.failureThreshold': '失败阈值(次)',
+                'breaker.failureThresholdHint': '连续失败达到该次数后打开熔断。',
+                'breaker.failureWindowSec': '失败窗口(秒)',
+                'breaker.failureWindowSecHint': '错误率统计的时间窗口。',
+                'breaker.openDurationSec': '熔断持续(秒)',
+                'breaker.openDurationSecHint': '打开熔断后拒绝选择该账号的时长。',
+                'breaker.halfOpenMaxSuccess': '半开成功次数',
+                'breaker.halfOpenMaxSuccessHint': '半开状态连续成功多少次后关闭熔断。',
+                'breaker.errorRateThreshold': '错误率阈值',
+                'breaker.errorRateThresholdHint': '窗口内错误率超过该值自动熔断，范围 0-1。',
+                'breaker.errorRateMinReqs': '最少请求数',
+                'breaker.errorRateMinReqsHint': '错误率检查需要的最少样本数。',
+                'breaker.accounts': '账号熔断状态',
+                'breaker.open': '熔断',
+                'breaker.close': '解除熔断',
+                'breaker.stateClosed': '正常',
+                'breaker.stateOpen': '已熔断',
+                'breaker.stateHalfOpen': '半开',
+                'breaker.until': '剩余',
+                'breaker.cooldown': '冷却',
+                'breaker.errorRate': '错误率',
+                'breaker.recent': '窗口',
+                'breaker.failures': '失败',
+                'breaker.successStreak': '成功',
+                'breaker.empty': '暂无账号',
                 'accounts.title': '账号列表',
                 'accounts.add': '添加账号',
                 'accounts.empty': '暂无账号',
@@ -1427,8 +1607,39 @@
                 'stats.retries': 'Retries',
                 'tabs.accounts': 'Accounts',
                 'tabs.logs': 'Logs',
+                'tabs.breaker': 'Breaker',
                 'tabs.settings': 'Settings',
                 'tabs.api': 'API',
+                'breaker.title': 'Circuit Breaker',
+                'breaker.refresh': 'Refresh',
+                'breaker.notice': 'Account-level circuit breaking temporarily removes accounts after repeated failures, quota errors, or high error rates so bad nodes do not break global tests.',
+                'breaker.settings': 'Breaker Settings',
+                'breaker.switch': 'Enabled',
+                'breaker.failureThreshold': 'Failure Threshold',
+                'breaker.failureThresholdHint': 'Open the circuit after this many consecutive failures.',
+                'breaker.failureWindowSec': 'Failure Window (sec)',
+                'breaker.failureWindowSecHint': 'Rolling window for error-rate checks.',
+                'breaker.openDurationSec': 'Open Duration (sec)',
+                'breaker.openDurationSecHint': 'How long an open circuit blocks account selection.',
+                'breaker.halfOpenMaxSuccess': 'Half-open Successes',
+                'breaker.halfOpenMaxSuccessHint': 'Close the circuit after this many consecutive successes.',
+                'breaker.errorRateThreshold': 'Error-rate Threshold',
+                'breaker.errorRateThresholdHint': 'Open when rolling error rate exceeds this value, 0-1.',
+                'breaker.errorRateMinReqs': 'Minimum Requests',
+                'breaker.errorRateMinReqsHint': 'Minimum samples required for error-rate checks.',
+                'breaker.accounts': 'Account Circuit State',
+                'breaker.open': 'Open',
+                'breaker.close': 'Close',
+                'breaker.stateClosed': 'Healthy',
+                'breaker.stateOpen': 'Open',
+                'breaker.stateHalfOpen': 'Half-open',
+                'breaker.until': 'Remaining',
+                'breaker.cooldown': 'Cooldown',
+                'breaker.errorRate': 'Error rate',
+                'breaker.recent': 'Window',
+                'breaker.failures': 'Failures',
+                'breaker.successStreak': 'Success',
+                'breaker.empty': 'No accounts',
                 'accounts.title': 'Account List',
                 'accounts.add': 'Add Account',
                 'accounts.empty': 'No accounts',
@@ -1641,6 +1852,7 @@
             updateLangButtons();
             applyTranslations();
             renderAccounts();
+            renderBreaker();
         }
         function updateLangButtons() {
             document.querySelectorAll('.lang-btn').forEach(btn => {
@@ -1660,6 +1872,7 @@
         const baseUrl = location.origin;
         let accountsData = [];
         let clashStatus = { subscriptionUrl: '', loaded: 0, names: [], lastFetch: 0, lastError: '' };
+        let breakerData = { config: {}, accounts: [] };
 
         // 隐私模式状态管理
         let privacyModeEnabled = true;
@@ -1781,7 +1994,7 @@
             // bound node looks like "(missing)" until the next interaction.
             await loadClash();
             await loadTestEndpoints();
-            await Promise.all([loadStats(), loadAccounts(), loadSettings(), loadVersion()]);
+            await Promise.all([loadStats(), loadAccounts(), loadSettings(), loadVersion(), loadBreaker()]);
             document.getElementById('claudeEndpoint').textContent = baseUrl + '/v1/messages';
             document.getElementById('openaiEndpoint').textContent = baseUrl + '/v1/chat/completions';
             document.getElementById('modelsEndpoint').textContent = baseUrl + '/v1/models';
@@ -2063,6 +2276,130 @@
                 if (d.success) { alert(t('detail.saved')); loadAccounts(); } else { alert(t('detail.saveFailed') + ': ' + (d.error || '')); }
             } catch (e) { alert(t('detail.saveFailed')); }
         }
+        async function loadBreaker() {
+            try {
+                const res = await fetch('/admin/api/breaker', { headers: { 'X-Admin-Password': password } });
+                breakerData = await res.json();
+                renderBreaker();
+            } catch (e) {
+                const list = document.getElementById('breakerAccounts');
+                if (list) list.innerHTML = '<p style="color:#ef4444">' + t('common.failed') + ': ' + e.message + '</p>';
+            }
+        }
+        function renderBreaker() {
+            const cfg = breakerData.config || {};
+            const setVal = (id, value) => { const el = document.getElementById(id); if (el) el.value = value; };
+            const enabled = document.getElementById('breakerEnabled');
+            if (enabled) enabled.checked = cfg.enabled !== false;
+            setVal('breakerFailureThreshold', cfg.failureThreshold || 3);
+            setVal('breakerFailureWindowSec', cfg.failureWindowSec || 300);
+            setVal('breakerOpenDurationSec', cfg.openDurationSec || 300);
+            setVal('breakerHalfOpenMaxSuccess', cfg.halfOpenMaxSuccess || 5);
+            setVal('breakerErrorRateThreshold', cfg.errorRateThreshold || 0.8);
+            setVal('breakerErrorRateMinReqs', cfg.errorRateMinReqs || 5);
+
+            const accounts = breakerData.accounts || [];
+            const summary = document.getElementById('breakerSummary');
+            if (summary) {
+                const open = accounts.filter(a => a.state === 'open').length;
+                const half = accounts.filter(a => a.state === 'half_open').length;
+                summary.textContent = accounts.length + ' accounts · ' + open + ' open · ' + half + ' half-open';
+            }
+            const list = document.getElementById('breakerAccounts');
+            if (!list) return;
+            if (accounts.length === 0) {
+                list.innerHTML = '<p style="color:#64748b">' + t('breaker.empty') + '</p>';
+                return;
+            }
+            list.innerHTML = accounts.map(a => renderBreakerAccount(a)).join('');
+        }
+        function renderBreakerAccount(a) {
+            const state = a.state || 'closed';
+            const stateLabel = state === 'open' ? t('breaker.stateOpen') : (state === 'half_open' ? t('breaker.stateHalfOpen') : t('breaker.stateClosed'));
+            const badgeClass = state === 'open' ? 'badge-error' : (state === 'half_open' ? 'badge-warning' : 'badge-success');
+            const pct = Math.round((a.errorRate || 0) * 1000) / 10;
+            const progressClass = pct >= 80 ? 'danger' : (pct >= 40 ? 'warn' : '');
+            const remaining = a.openUntil ? Math.max(0, Math.ceil(a.openUntil - Date.now() / 1000)) : 0;
+            const cooldown = a.cooldownUntil ? Math.max(0, Math.ceil(a.cooldownUntil - Date.now() / 1000)) : 0;
+            return '<div class="breaker-account">' +
+                '<div class="breaker-account-head">' +
+                '<div class="breaker-account-name">' + escapeHtml(getDisplayEmail(a.email, a.id)) + '</div>' +
+                '<span class="badge ' + badgeClass + '">' + stateLabel + (a.manual ? ' · manual' : '') + '</span>' +
+                '</div>' +
+                '<div class="breaker-progress"><span class="' + progressClass + '" style="width:' + Math.min(100, pct) + '%"></span></div>' +
+                '<div class="breaker-kv">' +
+                '<div>' + t('breaker.errorRate') + ': <strong>' + pct.toFixed(1) + '%</strong></div>' +
+                '<div>' + t('breaker.recent') + ': <strong>' + (a.recentRequests || 0) + '</strong></div>' +
+                '<div>' + t('breaker.failures') + ': <strong>' + (a.failureCount || 0) + '</strong></div>' +
+                '<div>' + t('breaker.successStreak') + ': <strong>' + (a.successStreak || 0) + '</strong></div>' +
+                (remaining ? '<div>' + t('breaker.until') + ': <strong>' + formatSeconds(remaining) + '</strong></div>' : '') +
+                (cooldown ? '<div>' + t('breaker.cooldown') + ': <strong>' + formatSeconds(cooldown) + '</strong></div>' : '') +
+                '</div>' +
+                '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+                '<button class="btn btn-sm btn-danger" onclick="openBreakerAccount(\'' + a.id + '\')">' + t('breaker.open') + '</button>' +
+                '<button class="btn btn-sm btn-secondary" onclick="closeBreakerAccount(\'' + a.id + '\')">' + t('breaker.close') + '</button>' +
+                '<span style="font-size:12px;color:#64748b;margin-left:auto">' + (a.proxyNode || a.proxyUrl || t('accounts.proxyDirect')) + '</span>' +
+                '</div>' +
+                '</div>';
+        }
+        function getBreakerConfigFromForm() {
+            const num = (id, fallback) => {
+                const value = parseFloat(document.getElementById(id)?.value || '');
+                return Number.isFinite(value) ? value : fallback;
+            };
+            return {
+                enabled: !!document.getElementById('breakerEnabled')?.checked,
+                failureThreshold: Math.max(1, Math.round(num('breakerFailureThreshold', 3))),
+                failureWindowSec: Math.max(1, Math.round(num('breakerFailureWindowSec', 300))),
+                openDurationSec: Math.max(1, Math.round(num('breakerOpenDurationSec', 300))),
+                halfOpenMaxSuccess: Math.max(1, Math.round(num('breakerHalfOpenMaxSuccess', 5))),
+                errorRateThreshold: Math.min(1, Math.max(0.01, num('breakerErrorRateThreshold', 0.8))),
+                errorRateMinReqs: Math.max(1, Math.round(num('breakerErrorRateMinReqs', 5)))
+            };
+        }
+        async function saveBreaker() {
+            const result = document.getElementById('breakerSaveResult');
+            if (result) result.textContent = '';
+            try {
+                const res = await fetch('/admin/api/breaker', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                    body: JSON.stringify(getBreakerConfigFromForm())
+                });
+                const d = await res.json().catch(() => ({}));
+                if (!res.ok || !d.success) throw new Error(d.error || 'save failed');
+                if (result) {
+                    result.style.color = '#059669';
+                    result.textContent = t('common.saved');
+                }
+                await loadBreaker();
+            } catch (e) {
+                if (result) {
+                    result.style.color = '#ef4444';
+                    result.textContent = t('common.saveFailed') + ': ' + e.message;
+                } else {
+                    alert(t('common.saveFailed') + ': ' + e.message);
+                }
+            }
+        }
+        async function openBreakerAccount(id) {
+            const durationSec = parseInt(document.getElementById('breakerOpenDurationSec')?.value || '300', 10) || 300;
+            await fetch('/admin/api/breaker/accounts/' + id + '/open', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                body: JSON.stringify({ durationSec })
+            });
+            loadBreaker();
+        }
+        async function closeBreakerAccount(id) {
+            await fetch('/admin/api/breaker/accounts/' + id + '/close', { method: 'POST', headers: { 'X-Admin-Password': password } });
+            loadBreaker();
+        }
+        function formatSeconds(sec) {
+            if (sec < 60) return sec + 's';
+            if (sec < 3600) return Math.ceil(sec / 60) + 'm';
+            return Math.ceil(sec / 3600) + 'h';
+        }
         async function loadSettings() {
             const res = await fetch('/admin/api/settings', { headers: { 'X-Admin-Password': password } });
             const d = await res.json();
@@ -2254,6 +2591,7 @@
             document.querySelectorAll('.tab-content').forEach(c => c.classList.add('hidden'));
             document.getElementById('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
             if (tab === 'logs') loadLogs();
+            if (tab === 'breaker') loadBreaker();
         }
 
         async function loadLogs() {

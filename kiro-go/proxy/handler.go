@@ -42,12 +42,12 @@ func (sr *statusRecorder) Write(b []byte) (int, error) {
 }
 
 type RequestLogAttempt struct {
-	Try        int   `json:"try"`
+	Try        int    `json:"try"`
 	AccountID  string `json:"accountId,omitempty"`
 	Email      string `json:"email,omitempty"`
-	StatusCode int   `json:"statusCode"`
+	StatusCode int    `json:"statusCode"`
 	Error      string `json:"error,omitempty"`
-	DurationMs int64 `json:"durationMs"`
+	DurationMs int64  `json:"durationMs"`
 }
 
 type RequestLogEntry struct {
@@ -2116,6 +2116,16 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetStats(w, r)
 	case path == "/request-logs" && r.Method == "GET":
 		h.apiGetRequestLogs(w, r)
+	case path == "/breaker" && r.Method == "GET":
+		h.apiGetBreaker(w, r)
+	case path == "/breaker" && r.Method == "POST":
+		h.apiUpdateBreaker(w, r)
+	case strings.HasPrefix(path, "/breaker/accounts/") && strings.HasSuffix(path, "/open") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/breaker/accounts/"), "/open")
+		h.apiOpenBreakerAccount(w, r, id)
+	case strings.HasPrefix(path, "/breaker/accounts/") && strings.HasSuffix(path, "/close") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/breaker/accounts/"), "/close")
+		h.apiCloseBreakerAccount(w, r, id)
 	case path == "/accounts/weight" && r.Method == "POST":
 		h.apiUpdateAccountWeight(w, r)
 	case path == "/stats/reset" && r.Method == "POST":
@@ -2749,6 +2759,54 @@ func (h *Handler) apiUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
+func (h *Handler) apiGetBreaker(w http.ResponseWriter, r *http.Request) {
+	accounts := config.GetAccounts()
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"config":   config.GetCircuitBreakerConfig(),
+		"accounts": h.pool.BreakerSnapshot(accounts),
+	})
+}
+
+func (h *Handler) apiUpdateBreaker(w http.ResponseWriter, r *http.Request) {
+	var req config.CircuitBreakerConfig
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdateCircuitBreakerConfig(req); err != nil {
+		w.WriteHeader(500)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"config":  config.GetCircuitBreakerConfig(),
+	})
+}
+
+func (h *Handler) apiOpenBreakerAccount(w http.ResponseWriter, r *http.Request, id string) {
+	var req struct {
+		DurationSec int `json:"durationSec"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if !h.pool.ForceOpenCircuit(id, req.DurationSec) {
+		w.WriteHeader(404)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Account not found"})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func (h *Handler) apiCloseBreakerAccount(w http.ResponseWriter, r *http.Request, id string) {
+	if !h.pool.CloseCircuit(id) {
+		w.WriteHeader(404)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Account not found"})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
 func (h *Handler) apiGetStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"totalRequests":         atomic.LoadInt64(&h.totalRequests),
@@ -2992,42 +3050,42 @@ func (h *Handler) apiGetAccountFull(w http.ResponseWriter, r *http.Request, id s
 
 	// 返回完整账号信息（包含敏感字段）
 	result := map[string]interface{}{
-		"id":                  account.ID,
-		"email":               account.Email,
-		"userId":              account.UserId,
-		"nickname":            account.Nickname,
-		"weight":              account.Weight,
-		"accessToken":         account.AccessToken,
-		"refreshToken":        account.RefreshToken,
-		"clientId":            account.ClientID,
-		"clientSecret":        account.ClientSecret,
-		"authMethod":          account.AuthMethod,
-		"provider":            account.Provider,
-		"region":              account.Region,
-		"expiresAt":           account.ExpiresAt,
-		"machineId":           account.MachineId,
-		"enabled":             account.Enabled,
-		"banStatus":           account.BanStatus,
-		"banReason":           account.BanReason,
-		"banTime":             account.BanTime,
-		"subscriptionType":    account.SubscriptionType,
-		"subscriptionTitle":   account.SubscriptionTitle,
-		"daysRemaining":       account.DaysRemaining,
-		"usageCurrent":        account.UsageCurrent,
-		"usageLimit":          account.UsageLimit,
-		"usagePercent":        account.UsagePercent,
-		"nextResetDate":       account.NextResetDate,
-		"lastRefresh":         account.LastRefresh,
-		"trialUsageCurrent":   account.TrialUsageCurrent,
-		"trialUsageLimit":     account.TrialUsageLimit,
-		"trialUsagePercent":   account.TrialUsagePercent,
-		"trialStatus":         account.TrialStatus,
-		"trialExpiresAt":      account.TrialExpiresAt,
-		"requestCount":        stats.RequestCount,
-		"errorCount":          stats.ErrorCount,
-		"totalTokens":         stats.TotalTokens,
-		"totalCredits":        stats.TotalCredits,
-		"lastUsed":            stats.LastUsed,
+		"id":                account.ID,
+		"email":             account.Email,
+		"userId":            account.UserId,
+		"nickname":          account.Nickname,
+		"weight":            account.Weight,
+		"accessToken":       account.AccessToken,
+		"refreshToken":      account.RefreshToken,
+		"clientId":          account.ClientID,
+		"clientSecret":      account.ClientSecret,
+		"authMethod":        account.AuthMethod,
+		"provider":          account.Provider,
+		"region":            account.Region,
+		"expiresAt":         account.ExpiresAt,
+		"machineId":         account.MachineId,
+		"enabled":           account.Enabled,
+		"banStatus":         account.BanStatus,
+		"banReason":         account.BanReason,
+		"banTime":           account.BanTime,
+		"subscriptionType":  account.SubscriptionType,
+		"subscriptionTitle": account.SubscriptionTitle,
+		"daysRemaining":     account.DaysRemaining,
+		"usageCurrent":      account.UsageCurrent,
+		"usageLimit":        account.UsageLimit,
+		"usagePercent":      account.UsagePercent,
+		"nextResetDate":     account.NextResetDate,
+		"lastRefresh":       account.LastRefresh,
+		"trialUsageCurrent": account.TrialUsageCurrent,
+		"trialUsageLimit":   account.TrialUsageLimit,
+		"trialUsagePercent": account.TrialUsagePercent,
+		"trialStatus":       account.TrialStatus,
+		"trialExpiresAt":    account.TrialExpiresAt,
+		"requestCount":      stats.RequestCount,
+		"errorCount":        stats.ErrorCount,
+		"totalTokens":       stats.TotalTokens,
+		"totalCredits":      stats.TotalCredits,
+		"lastUsed":          stats.LastUsed,
 	}
 
 	json.NewEncoder(w).Encode(result)
