@@ -227,35 +227,55 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 
 // runProxyTest hits a list of public IP-info endpoints through `client` and
 // returns the first successful response, or the last error.
+//
+// We try multiple unrelated providers because some nodes (especially HK
+// machines) blacklist the ipinfo / ifconfig.co / ip.sb family. Cloudflare's
+// trace endpoint is plain text and is therefore parsed separately.
 func runProxyTest(client *http.Client) proxyTestResult {
-	endpoints := []string{
-		"https://ipinfo.io/json",
-		"https://ifconfig.co/json",
-		"https://api.ip.sb/geoip",
+	type endpoint struct {
+		url      string
+		isTrace  bool // true → key=value text format from /cdn-cgi/trace
+	}
+	endpoints := []endpoint{
+		{"https://ipinfo.io/json", false},
+		{"https://ifconfig.co/json", false},
+		{"https://api.ip.sb/geoip", false},
+		{"https://www.cloudflare.com/cdn-cgi/trace", true},
+		{"https://1.1.1.1/cdn-cgi/trace", true},
+		{"https://api.myip.com", false},
 	}
 	start := time.Now()
 	var lastErr string
 	for _, ep := range endpoints {
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, "GET", ep, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, "GET", ep.url, nil)
 		req.Header.Set("User-Agent", "curl/8.4")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "application/json,text/plain")
 		resp, err := client.Do(req)
 		if err != nil {
 			cancel()
-			lastErr = err.Error()
+			lastErr = ep.url + ": " + err.Error()
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		resp.Body.Close()
 		cancel()
 		if resp.StatusCode/100 != 2 {
-			lastErr = fmt.Sprintf("%s: HTTP %d", ep, resp.StatusCode)
+			lastErr = fmt.Sprintf("%s: HTTP %d", ep.url, resp.StatusCode)
 			continue
 		}
-		r := parseGeoResponse(body)
+		var r proxyTestResult
+		if ep.isTrace {
+			r = parseCloudflareTrace(body)
+		} else {
+			r = parseGeoResponse(body)
+		}
+		if r.IP == "" && r.Error == "" {
+			lastErr = ep.url + ": empty parse"
+			continue
+		}
 		r.OK = true
-		r.Endpoint = ep
+		r.Endpoint = ep.url
 		r.LatencyMs = time.Since(start).Milliseconds()
 		return r
 	}
@@ -264,6 +284,33 @@ func runProxyTest(client *http.Client) proxyTestResult {
 		LatencyMs: time.Since(start).Milliseconds(),
 		Error:     lastErr,
 	}
+}
+
+// parseCloudflareTrace handles `key=value\n` text from /cdn-cgi/trace.
+// Sample fields: ip=..., loc=US, colo=IAD, ts=..., visit_scheme=https.
+func parseCloudflareTrace(body []byte) proxyTestResult {
+	out := proxyTestResult{}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		key, val := line[:eq], line[eq+1:]
+		switch key {
+		case "ip":
+			out.IP = val
+		case "loc":
+			out.Country = val
+		case "colo":
+			// Cloudflare datacenter code (IAD = Ashburn etc.) — surface it as City.
+			out.City = val
+		}
+	}
+	return out
 }
 
 // parseGeoResponse extracts common fields across ipinfo/ifconfig.co/ip.sb.
