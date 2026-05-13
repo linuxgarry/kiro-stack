@@ -6,6 +6,36 @@ This repository is forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug
 
 ---
 
+## v2.1 — Trojan 跳板 + UI 收尾 / Trojan jump + UI polish
+
+紧接 v2 后的小步迭代：
+
+Small follow-up to v2:
+
+- **跳板支持 trojan**（除了 http/https/socks5）。设置页填 `trojan://密码@host:443?sni=example.com&skip-cert-verify=true&alpn=h2,http/1.1`，由 mihomo 内核负责协议握手——无需额外 sidecar。
+- **跳板作用范围讲清楚**：跳板生效在 **订阅 YAML 拉取** 和 **`ClientForJumpOnly` 这条「单跳」路径** 上。**节点级链式 dial（dial(jump) → tunnel-to-node → node-handshake → target）暂未实现** —— mihomo 当前 `ProxyAdapter` 接口没有暴露允许外部注入「上游 dialer」的方法（`dialer-proxy` 字段需要把 jump 注册进 mihomo 自己的 Tunnel runtime，本项目只把它当库用）。我尝试了用 `StreamConnContext` 自行链式 dial，编译失败后撤回，老实写在文档里。如果你的 VPS 直连屏蔽节点，目前的可行解：用 v1 的「账号代理」字段直接给账号配一个能联通的 http/socks5。
+- **`/admin/api/outbound` POST 现在直接热加载 jump 到内存**，不需要重启容器。
+- **账号卡片去掉零数据行**：`0 请求 · 0 tok · 0 cr` 这种新账号永远是 0 的占位栏被砍掉，腾出位置给真正用得到的内容。
+
+What changed:
+
+- **Jump now supports trojan** (in addition to http/https/socks5). Format: `trojan://password@host:443?sni=...&skip-cert-verify=true&alpn=h2,http/1.1`. Mihomo handles the handshake — no sidecar needed.
+- **Jump scope is documented honestly**: the jump applies to **subscription YAML fetches** and the **`ClientForJumpOnly` single-hop path**. **Node-level chain dial (dial(jump) → tunnel-to-node → node handshake → target) is NOT implemented** — mihomo's current `ProxyAdapter` interface does not expose a way to inject an upstream dialer from outside its Tunnel runtime. I attempted it via `StreamConnContext`, failed to compile, and rolled back rather than ship something half-working. Workaround if your VPS can't reach Clash nodes directly: use v1's per-account `proxyUrl` to point at a reachable http/socks5.
+- **`POST /admin/api/outbound` hot-installs the jump into memory** — no container restart.
+- **Removed the always-zero stats line** from account cards (`0 requests · 0 tok · 0 cr`).
+
+### v2.1 修改的文件 / v2.1 files changed
+
+| 文件 | 改动 |
+|------|------|
+| `kiro-go/clash/jump.go` (**新**) | `parseJumpURL` 把 URL 转成 mihomo `C.Proxy`；trojan 支持 `?sni=&skip-cert-verify=&alpn=` 查询参数 |
+| `kiro-go/clash/manager.go` | `Manager` 新增 `jump`/`jumpRawURL`/`jumpLastErr` 字段，`SetJump`/`JumpURL`/`JumpError` 公开方法；`Init` 启动时 SetJump；`fetchSubscription` 改走 jump 的 `DialContext`（兼容 trojan） |
+| `kiro-go/clash/dial.go` | 新增 `ClientForJumpOnly`（单跳直接走 jump，用于联通性测试 fallback）；移除半成品的 chain-dial 路径 |
+| `kiro-go/proxy/clash_handlers.go` | `apiUpdateOutbound` 现在调 `clash.Default().SetJump`，热加载；`urlParseStrict` 接收 `trojan://` |
+| `kiro-go/web/index.html` | 跳板说明文案改为「前置 / Prepend」并提到 trojan 例子；账号卡片底部那行 0/0/0 占位栏删除 |
+
+---
+
 ## v2 — Clash 内核集成 + 全局跳板 + 紧凑 UI / Clash core integration + global jump host + compact UI
 
 把 **Clash.Meta (mihomo) 内核作为 Go 库** 直接编进 `kiro-go`，单容器同时跑「API 网关」+「Clash 客户端」。账号可以在网页上一键绑定订阅里的任意节点（ss / vmess / vless / trojan / hysteria2 / tuic 等），不再受限于 http/socks5。

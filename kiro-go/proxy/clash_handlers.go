@@ -24,7 +24,9 @@ func (h *Handler) apiGetOutbound(w http.ResponseWriter, r *http.Request) {
 }
 
 // apiUpdateOutbound persists the global outbound proxy URL. Empty string
-// clears the jump host; non-empty is validated as http/https/socks5.
+// clears the jump host; non-empty is validated as http/https/socks5/trojan.
+// On save we also install it into the live Clash manager so every per-node
+// dial chains through it without restart.
 func (h *Handler) apiUpdateOutbound(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		URL string `json:"url"`
@@ -36,13 +38,16 @@ func (h *Handler) apiUpdateOutbound(w http.ResponseWriter, r *http.Request) {
 	}
 	req.URL = strings.TrimSpace(req.URL)
 	if req.URL != "" {
-		u, err := urlParseStrict(req.URL)
-		if err != nil {
+		if _, err := urlParseStrict(req.URL); err != nil {
 			w.WriteHeader(400)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
 		}
-		_ = u
+	}
+	if err := clash.Default().SetJump(req.URL); err != nil {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
 	}
 	if err := config.UpdateGlobalOutboundProxy(req.URL); err != nil {
 		w.WriteHeader(500)
@@ -74,12 +79,14 @@ func (h *Handler) apiUpdateModelMapping(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "entries": len(config.GetModelMapping())})
 }
 
-// urlParseStrict rejects anything that isn't http/https/socks5.
+// urlParseStrict rejects anything that isn't http/https/socks5/trojan.
 func urlParseStrict(s string) (string, error) {
-	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "socks5://") || strings.HasPrefix(s, "socks5h://") {
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "socks5://") || strings.HasPrefix(s, "socks5h://") ||
+		strings.HasPrefix(s, "trojan://") {
 		return s, nil
 	}
-	return "", fmt.Errorf("proxy URL must start with http://, https://, socks5://, or socks5h://")
+	return "", fmt.Errorf("proxy URL must start with http://, https://, socks5://, socks5h://, or trojan://")
 }
 
 // apiUpdateClash accepts {"subscriptionUrl": "..."} from the admin UI.

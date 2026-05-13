@@ -1309,9 +1309,9 @@
                 'accounts.proxyTestRunning': '测试中…',
                 'accounts.proxyTestOK': '联通',
                 'accounts.proxyTestFail': '失败',
-                'settings.outboundTitle': '全局跳板代理',
-                'settings.outboundLabel': '订阅拉取代理',
-                'settings.outboundHint': '当 VPS 直连屏蔽订阅 CDN 时使用；格式：http://host:port、https://host:port 或 socks5://host:port。留空则不走跳板。',
+                'settings.outboundTitle': '全局跳板代理（前置）',
+                'settings.outboundLabel': '跳板地址',
+                'settings.outboundHint': '所有出站流量先走这里，再到 Clash 节点 / 直接目标。VPS 直连屏蔽了节点的场景必备。支持 http/https/socks5/trojan。示例：trojan://密码@host:443?sni=example.com',
                 'settings.mappingTitle': '模型映射',
                 'settings.mappingHint': '左：调用方传入的 model 名；右：实际转发给 Kiro 的 model 名。未列出的模型按原名透传。',
                 'settings.mappingAdd': '+ 添加',
@@ -1522,9 +1522,9 @@
                 'accounts.proxyTestRunning': 'Testing…',
                 'accounts.proxyTestOK': 'OK',
                 'accounts.proxyTestFail': 'Failed',
-                'settings.outboundTitle': 'Global Outbound Proxy',
-                'settings.outboundLabel': 'Subscription Fetch Proxy',
-                'settings.outboundHint': 'Used when the VPS cannot directly reach the subscription CDN. Format: http://host:port, https://host:port, or socks5://host:port. Leave empty for direct.',
+                'settings.outboundTitle': 'Global Jump Host (Prepend)',
+                'settings.outboundLabel': 'Jump URL',
+                'settings.outboundHint': 'Every outbound connection (subscription fetch + each Clash node + direct calls) is dialed THROUGH this jump first. Required when the VPS cannot reach Clash node servers directly. Supports http/https/socks5/trojan. Example: trojan://password@host:443?sni=example.com',
                 'settings.mappingTitle': 'Model Mapping',
                 'settings.mappingHint': 'Left: inbound model name from callers. Right: what we actually send to Kiro. Unlisted models pass through unchanged.',
                 'settings.mappingAdd': '+ Add',
@@ -1828,7 +1828,6 @@
                     '<span>权重:</span>' +
                     '<input id="weight-' + a.id + '" type="number" value="' + (a.weight || 100) + '" min="1" max="10000" style="width:70px">' +
                     '<button class="btn btn-sm btn-secondary" onclick="saveWeight(\'' + a.id + '\')">保存</button>' +
-                    '<span style="margin-left:auto">' + (a.requestCount || 0) + ' · ' + formatNum(a.totalTokens || 0) + ' tok · ' + (a.totalCredits || 0).toFixed(1) + ' cr</span>' +
                     '</div>' +
                     '</div>';
             }).join('');

@@ -4,14 +4,16 @@
 package clash
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"kiro-api-proxy/config"
+	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +42,11 @@ type Manager struct {
 	generation uint64             // incremented on every successful load
 	lastErr    string
 	lastFetch  int64
+	// jump is the parsed global outbound proxy (http/https/socks5/trojan).
+	// nil = no jump configured. Rebuilt by SetJump.
+	jump        C.Proxy
+	jumpRawURL  string
+	jumpLastErr string
 }
 
 var (
@@ -55,6 +62,12 @@ func Default() *Manager { return mgr }
 // background re-fetch of the live URL. Returns the number of nodes loaded
 // from cache synchronously.
 func Init() (loaded int, err error) {
+	// Always install the jump proxy first so the subscription fetch can
+	// chain through it. Empty URL is a no-op.
+	if jump := config.GetGlobalOutboundProxy(); jump != "" {
+		_ = mgr.SetJump(jump)
+	}
+
 	subURL := config.GetClashSubscriptionURL()
 	if subURL == "" {
 		return 0, nil
@@ -188,6 +201,51 @@ func (m *Manager) Clear() {
 	}
 }
 
+// jumpProxy returns the configured global jump proxy, or nil.
+// Caller must NOT hold the manager mutex.
+func (m *Manager) jumpProxy() C.Proxy {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.jump
+}
+
+// SetJump installs a new global outbound (jump) proxy from a URL string.
+// An empty string clears the jump.
+func (m *Manager) SetJump(rawURL string) error {
+	p, err := parseJumpURL(rawURL)
+	if err != nil {
+		m.mu.Lock()
+		m.jumpLastErr = err.Error()
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Lock()
+	m.jump = p
+	m.jumpRawURL = strings.TrimSpace(rawURL)
+	m.jumpLastErr = ""
+	atomic.AddUint64(&m.generation, 1)
+	m.mu.Unlock()
+	// Per-node clients embed the dialer chain at construction time; bumping
+	// generation alone won't be enough because old keys are still valid.
+	// Drop everything so the new jump takes effect immediately.
+	invalidateClientCache()
+	return nil
+}
+
+// JumpURL returns the raw URL last passed to SetJump (or empty string).
+func (m *Manager) JumpURL() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.jumpRawURL
+}
+
+// JumpError returns the parse error from the most recent SetJump call.
+func (m *Manager) JumpError() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.jumpLastErr
+}
+
 func (m *Manager) setError(msg string) {
 	m.mu.Lock()
 	m.lastErr = msg
@@ -196,8 +254,8 @@ func (m *Manager) setError(msg string) {
 }
 
 // fetchSubscription downloads the subscription URL with a Clash-like UA.
-// It honors the optional GlobalOutboundProxy so VPS that block direct
-// access to subscription CDNs can still reach them via a jump host.
+// If a jump host is configured, the fetch goes through it (mihomo dialer,
+// so trojan etc. work). Otherwise it dials directly.
 func fetchSubscription(subURL string) ([]byte, error) {
 	req, err := http.NewRequest("GET", subURL, nil)
 	if err != nil {
@@ -213,9 +271,22 @@ func fetchSubscription(subURL string) ([]byte, error) {
 		MaxIdleConnsPerHost: 2,
 		IdleConnTimeout:     30 * time.Second,
 	}
-	if jump := strings.TrimSpace(config.GetGlobalOutboundProxy()); jump != "" {
-		if u, perr := url.Parse(jump); perr == nil && u.Scheme != "" && u.Host != "" {
-			transport.Proxy = http.ProxyURL(u)
+	if jump := mgr.jumpProxy(); jump != nil {
+		// makeDialer with a nil "node" but jump as the only hop is exactly
+		// the same as dialing through jump directly — reuse the helper.
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if network == "udp" || network == "udp4" || network == "udp6" {
+				return nil, fmt.Errorf("UDP not supported")
+			}
+			host, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			port, err := strconv.ParseUint(portStr, 10, 16)
+			if err != nil {
+				return nil, err
+			}
+			return jump.DialContext(ctx, metadataFor(host, uint16(port)))
 		}
 	}
 	client := &http.Client{Timeout: 30 * time.Second, Transport: transport}
