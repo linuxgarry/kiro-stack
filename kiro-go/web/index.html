@@ -1227,6 +1227,10 @@
                 'detail.saved': '已保存',
                 'detail.saveFailed': '保存失败',
                 'detail.generateFailed': '生成失败',
+                'detail.proxy': '账号代理',
+                'detail.proxyHint': '格式：http://host:port、https://host:port 或 socks5://host:port；留空则直连',
+                'detail.proxyInvalid': '代理 URL 格式错误，请使用 http(s):// 或 socks5://',
+                'detail.proxyDirect': '直连',
                 'modal.addAccount': '添加账号',
                 'modal.builderIdTitle': 'AWS Builder ID',
                 'modal.builderIdDesc': '通过 AWS Builder ID 授权登录添加个人账号',
@@ -1414,6 +1418,10 @@
                 'detail.saved': 'Saved',
                 'detail.saveFailed': 'Save failed',
                 'detail.generateFailed': 'Generate failed',
+                'detail.proxy': 'Account Proxy',
+                'detail.proxyHint': 'Format: http://host:port, https://host:port, or socks5://host:port. Leave empty for direct connection.',
+                'detail.proxyInvalid': 'Invalid proxy URL. Use http(s):// or socks5://',
+                'detail.proxyDirect': 'Direct',
                 'modal.addAccount': 'Add Account',
                 'modal.builderIdTitle': 'AWS Builder ID',
                 'modal.builderIdDesc': 'Add personal account via AWS Builder ID authorization',
@@ -1823,6 +1831,11 @@
                 '<button class="btn btn-sm btn-secondary" onclick="generateMachineId()">' + t('detail.generate') + '</button>' +
                 '<button class="btn btn-sm btn-primary" onclick="saveMachineId(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
                 '</div></div>' +
+                '<div class="detail-section"><h4>' + t('detail.proxy') + '</h4><div class="machine-id-row">' +
+                '<input type="text" id="proxyUrlInput" value="' + (a.proxyUrl || '').replace(/"/g, '&quot;') + '" placeholder="http://host:port / socks5://host:port">' +
+                '<button class="btn btn-sm btn-secondary" onclick="clearProxy()">' + t('detail.proxyDirect') + '</button>' +
+                '<button class="btn btn-sm btn-primary" onclick="saveProxy(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
+                '</div><div style="font-size:12px;color:#64748b;margin-top:6px">' + t('detail.proxyHint') + '</div></div>' +
                 '<div class="detail-section"><h4>' + t('detail.subscription') + '</h4><div class="detail-grid">' +
                 '<div class="detail-item"><div class="detail-label">' + t('detail.subscriptionType') + '</div><div class="detail-value">' + (a.subscriptionTitle || a.subscriptionType || '-') + '</div></div>' +
                 '<div class="detail-item"><div class="detail-label">' + t('detail.tokenExpiry') + '</div><div class="detail-value">' + (a.expiresAt ? new Date(a.expiresAt * 1000).toLocaleString() : '-') + '</div></div>' +
@@ -1888,6 +1901,24 @@
                 });
                 const d = await res.json();
                 if (d.success) { alert(t('detail.saved')); loadAccounts(); } else { alert(t('detail.saveFailed') + ': ' + d.error); }
+            } catch (e) { alert(t('detail.saveFailed')); }
+        }
+        function clearProxy() {
+            const inp = document.getElementById('proxyUrlInput');
+            if (inp) inp.value = '';
+        }
+        async function saveProxy(id) {
+            const proxyUrl = document.getElementById('proxyUrlInput').value.trim();
+            if (proxyUrl && !/^(https?|socks5h?):\/\/[^\s/]+/i.test(proxyUrl)) {
+                alert(t('detail.proxyInvalid')); return;
+            }
+            try {
+                const res = await fetch('/admin/api/accounts/' + id, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                    body: JSON.stringify({ proxyUrl })
+                });
+                const d = await res.json();
+                if (d.success) { alert(t('detail.saved')); loadAccounts(); } else { alert(t('detail.saveFailed') + ': ' + (d.error || '')); }
             } catch (e) { alert(t('detail.saveFailed')); }
         }
         async function loadSettings() {

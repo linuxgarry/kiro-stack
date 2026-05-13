@@ -2171,6 +2171,7 @@ func (h *Handler) apiGetAccounts(w http.ResponseWriter, r *http.Request) {
 			"expiresAt":         a.ExpiresAt,
 			"hasToken":          a.AccessToken != "",
 			"machineId":         a.MachineId,
+			"proxyUrl":          a.ProxyURL,
 			"subscriptionType":  a.SubscriptionType,
 			"subscriptionTitle": a.SubscriptionTitle,
 			"daysRemaining":     a.DaysRemaining,
@@ -2272,6 +2273,19 @@ func (h *Handler) apiUpdateAccount(w http.ResponseWriter, r *http.Request, id st
 		if existing.Weight <= 0 {
 			existing.Weight = 100
 		}
+	}
+	if v, ok := updates["proxyUrl"].(string); ok {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			u, err := url.Parse(trimmed)
+			if err != nil || u.Scheme == "" || u.Host == "" ||
+				(u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") {
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Invalid proxyUrl, expected http(s)://host:port or socks5://host:port"})
+				return
+			}
+		}
+		existing.ProxyURL = trimmed
 	}
 
 	if err := config.UpdateAccount(id, *existing); err != nil {

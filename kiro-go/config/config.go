@@ -64,6 +64,9 @@ type Account struct {
 	BanReason string `json:"banReason,omitempty"` // Reason for ban/suspension
 	BanTime   int64  `json:"banTime,omitempty"`   // Timestamp when ban was detected
 
+	// Per-account proxy (http/https/socks5 URL). Empty string = direct connection.
+	ProxyURL string `json:"proxyUrl,omitempty"`
+
 	// Subscription information
 	SubscriptionType  string `json:"subscriptionType,omitempty"`  // Tier: FREE, PRO, PRO_PLUS, or POWER
 	SubscriptionTitle string `json:"subscriptionTitle,omitempty"` // Human-readable subscription name

@@ -40,7 +40,7 @@ var kiroEndpoints = []kiroEndpoint{
 	},
 }
 
-// 全局 HTTP 客户端，复用连接池
+// 全局 HTTP 客户端（默认：无代理），账号如配置了 proxyUrl 会使用按代理缓存的客户端
 var kiroHttpClient = &http.Client{
 	Timeout: 5 * time.Minute,
 	Transport: &http.Transport{
@@ -50,6 +50,13 @@ var kiroHttpClient = &http.Client{
 		DisableCompression:  false,            // 启用压缩
 		ForceAttemptHTTP2:   true,             // 尝试使用 HTTP/2
 	},
+}
+
+func pickKiroStreamClient(proxyURL string) *http.Client {
+	if proxyURL == "" {
+		return kiroHttpClient
+	}
+	return config.GetKiroStreamHTTPClient(proxyURL)
 }
 
 // ==================== 请求结构 ====================
@@ -204,7 +211,7 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 		req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
 		req.Header.Set("Authorization", "Bearer "+account.AccessToken)
 
-		resp, err := kiroHttpClient.Do(req)
+		resp, err := pickKiroStreamClient(account.ProxyURL).Do(req)
 		if err != nil {
 			lastErr = err
 			fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)
