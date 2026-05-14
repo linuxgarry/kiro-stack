@@ -1077,6 +1077,10 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			"role":    "assistant",
 			"content": []interface{}{},
 			"model":   model,
+			"usage": map[string]int{
+				"input_tokens":  0,
+				"output_tokens": 0,
+			},
 		},
 	})
 
