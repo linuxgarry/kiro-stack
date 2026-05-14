@@ -131,6 +131,10 @@ type Config struct {
 	// Exact hostnames and wildcard suffixes like "*.example.com" are supported.
 	DNSOverrides map[string]string `json:"dnsOverrides,omitempty"`
 
+	// DNSStrategy controls how proxy node hostnames are resolved before being
+	// handed to mihomo. Supported values: auto, global, china, system, off.
+	DNSStrategy string `json:"dnsStrategy,omitempty"`
+
 	// CircuitBreaker controls account-level failure isolation. It sits on
 	// top of the older short cooldown behavior and is managed from the admin UI.
 	CircuitBreaker CircuitBreakerConfig `json:"circuitBreaker,omitempty"`
@@ -220,7 +224,7 @@ type AccountInfo struct {
 }
 
 // Version 当前版本号
-const Version = "2.6.2"
+const Version = "2.6.3"
 
 var (
 	cfg     *Config
@@ -637,6 +641,33 @@ func UpdateDNSOverrides(in map[string]string) error {
 		cfg.DNSOverrides = cleaned
 	}
 	return Save()
+}
+
+// GetDNSStrategy returns the active DNS hardening strategy.
+func GetDNSStrategy() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return "auto"
+	}
+	return normalizeDNSStrategy(cfg.DNSStrategy)
+}
+
+// UpdateDNSStrategy persists the DNS hardening strategy.
+func UpdateDNSStrategy(strategy string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.DNSStrategy = normalizeDNSStrategy(strategy)
+	return Save()
+}
+
+func normalizeDNSStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "global", "china", "system", "off":
+		return strings.ToLower(strings.TrimSpace(strategy))
+	default:
+		return "auto"
+	}
 }
 
 // GetCircuitBreakerConfig returns normalized circuit-breaker settings.

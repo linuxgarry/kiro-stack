@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.3** | 后台新增 DNS 策略切换：auto/global/china/system/off |
 | 🆕 **v2.6.2** | 账号卡测试默认严格测节点真实出口，不再被业务 fallback 掩盖 |
 | 🆕 **v2.6.1** | DNS 覆盖表 · 代理测试显式标记 fallback · AliDNS/DNSPod DoH |
 | 🆕 **v2.6** | 🛡️ DNSGuard 抗污染 · Clash 节点失败自动回退到全局跳板 · 熔断管理标签页 |
@@ -18,6 +19,20 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🧭 v2.6.3 — DNS 策略切换 / DNS strategy switch
+
+设置页新增「DNS 策略」下拉，保存后会立即重载缓存订阅节点：
+
+- `auto`：Cloudflare → Google → AliDNS → DNSPod，默认策略。
+- `global`：只走 Cloudflare / Google，适合海外 VPS。
+- `china`：只走 AliDNS / DNSPod，适合国内网络或海外 DoH 被阻断时尝试。
+- `system`：只用系统 DNS，但会拒绝 `127.0.0.1`、内网、链路本地、组播等污染结果。
+- `off`：关闭自动解析改写，只使用手动 DNS 覆盖表。
+
+Manual DNS overrides still have the highest priority in every strategy.
 
 ---
 

@@ -2160,6 +2160,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiGetDNSOverrides(w, r)
 	case path == "/dns-overrides" && r.Method == "POST":
 		h.apiUpdateDNSOverrides(w, r)
+	case path == "/dns-strategy" && r.Method == "GET":
+		h.apiGetDNSStrategy(w, r)
+	case path == "/dns-strategy" && r.Method == "POST":
+		h.apiUpdateDNSStrategy(w, r)
 	case path == "/test-endpoints" && r.Method == "GET":
 		h.apiGetTestEndpoints(w, r)
 	case path == "/modelmapping" && r.Method == "GET":

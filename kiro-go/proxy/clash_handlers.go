@@ -83,6 +83,30 @@ func (h *Handler) apiGetDNSOverrides(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(config.GetDNSOverrides())
 }
 
+func (h *Handler) apiGetDNSStrategy(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(map[string]string{"strategy": config.GetDNSStrategy()})
+}
+
+func (h *Handler) apiUpdateDNSStrategy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Strategy string `json:"strategy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	if err := config.UpdateDNSStrategy(req.Strategy); err != nil {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	if config.GetClashSubscriptionURL() != "" {
+		_ = clash.Default().SetJump(config.GetGlobalOutboundProxy())
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "strategy": config.GetDNSStrategy()})
+}
+
 func (h *Handler) apiUpdateDNSOverrides(w http.ResponseWriter, r *http.Request) {
 	var in map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {

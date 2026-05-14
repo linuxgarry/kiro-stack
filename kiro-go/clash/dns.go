@@ -87,7 +87,12 @@ func hardenProxyDNS(nodeCfg map[string]any) {
 		return
 	}
 
-	clean, err := resolveCleanHost(host)
+	strategy := config.GetDNSStrategy()
+	if strategy == "off" {
+		return
+	}
+
+	clean, err := resolveCleanHost(host, strategy)
 	if err != nil {
 		if pollutedBySystemDNS(host) {
 			fmt.Printf("[DNSGuard] proxy %q server %s appears polluted but DoH failed: %v\n", nodeName(nodeCfg), host, err)
@@ -141,16 +146,12 @@ func pollutedBySystemDNS(host string) bool {
 	return false
 }
 
-func resolveCleanHost(host string) (cleanDNSResult, error) {
-	providers := []struct {
-		name string
-		base string
-	}{
-		{name: "cloudflare", base: "https://cloudflare-dns.com/dns-query"},
-		{name: "google", base: "https://dns.google/resolve"},
-		{name: "alidns", base: "https://dns.alidns.com/resolve"},
-		{name: "dnspod", base: "https://doh.pub/dns-query"},
+func resolveCleanHost(host, strategy string) (cleanDNSResult, error) {
+	if strategy == "system" {
+		return resolveSystemHost(host)
 	}
+
+	providers := dnsProvidersForStrategy(strategy)
 	var lastErr error
 	for _, p := range providers {
 		ips, err := queryDoH(p.base, host, "A")
@@ -169,6 +170,45 @@ func resolveCleanHost(host string) (cleanDNSResult, error) {
 		lastErr = fmt.Errorf("no usable A record")
 	}
 	return cleanDNSResult{}, lastErr
+}
+
+type dnsProvider struct {
+	name string
+	base string
+}
+
+func dnsProvidersForStrategy(strategy string) []dnsProvider {
+	global := []dnsProvider{
+		{name: "cloudflare", base: "https://cloudflare-dns.com/dns-query"},
+		{name: "google", base: "https://dns.google/resolve"},
+	}
+	china := []dnsProvider{
+		{name: "alidns", base: "https://dns.alidns.com/resolve"},
+		{name: "dnspod", base: "https://doh.pub/dns-query"},
+	}
+	switch strategy {
+	case "global":
+		return global
+	case "china":
+		return china
+	default:
+		return append(global, china...)
+	}
+}
+
+func resolveSystemHost(host string) (cleanDNSResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
+	if err != nil {
+		return cleanDNSResult{}, err
+	}
+	for _, ip := range addrs {
+		if !isBadProxyIP(ip) {
+			return cleanDNSResult{IP: ip.String(), Provider: "system"}, nil
+		}
+	}
+	return cleanDNSResult{}, fmt.Errorf("system DNS returned no usable A record")
 }
 
 func dnsOverrideFor(host string) (string, bool) {
