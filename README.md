@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.5** | 隧道断线自动刷新，支持 `{session}` 轮换和冷却保护 |
 | 🆕 **v2.6.4** | 全局/账号隧道代理，支持 Luminati/Bright Data、Rola 等 HTTP/SOCKS 隧道 |
 | 🆕 **v2.6.3** | 后台新增 DNS 策略切换：auto/global/china/system/off |
 | 🆕 **v2.6.2** | 账号卡测试默认严格测节点真实出口，不再被业务 fallback 掩盖 |
@@ -20,6 +21,27 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## ♻️ v2.6.5 — 隧道自动刷新 / Tunnel auto-refresh
+
+隧道代理支持 `{session}` 占位符。连续出现 EOF、timeout、407、429、5xx 等隧道异常达到阈值后，程序会自动生成新 session，下一次请求使用新隧道会话。
+
+示例：
+
+```text
+http://brd-customer-xxx-zone-xxx-session-{session}:password@brd.superproxy.io:22225
+```
+
+后台「全局隧道代理」卡片新增：
+
+- 断线自动刷新开关
+- 连续失败阈值
+- 刷新冷却秒数
+- 当前 session / 失败次数 / 最近错误 / 最近刷新时间
+
+没有 `{session}` 的固定隧道仍会记录失败并进入冷却，但无法真正更换代理商出口。
 
 ---
 

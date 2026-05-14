@@ -1267,9 +1267,24 @@
                 <div class="card-header"><span class="card-title" data-i18n="settings.tunnelTitle"></span></div>
                 <div class="form-group">
                     <label data-i18n="settings.tunnelLabel"></label>
-                    <input type="text" id="globalTunnelUrl" placeholder="http://user:pass@brd.superproxy.io:22225">
+                    <input type="text" id="globalTunnelUrl" placeholder="http://user-session-{session}:pass@brd.superproxy.io:22225">
                     <small style="color:#64748b;font-size:11px;display:block;margin-top:4px" data-i18n="settings.tunnelHint"></small>
                 </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label data-i18n="settings.tunnelRefreshEnabled"></label>
+                        <input type="checkbox" id="tunnelRefreshEnabled" style="width:auto">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="settings.tunnelFailureThreshold"></label>
+                        <input type="number" id="tunnelFailureThreshold" min="1" value="3">
+                    </div>
+                    <div class="form-group">
+                        <label data-i18n="settings.tunnelCooldownSec"></label>
+                        <input type="number" id="tunnelCooldownSec" min="1" value="60">
+                    </div>
+                </div>
+                <div id="tunnelRuntime" style="font-size:12px;color:#64748b;margin-bottom:8px"></div>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <button class="btn btn-primary" onclick="saveTunnel()" data-i18n="common.save"></button>
                     <button class="btn btn-secondary" onclick="clearTunnel()" data-i18n="common.clear"></button>
@@ -1543,7 +1558,10 @@
                 'settings.testEndpointAuto': '自动 (依次回退)',
                 'settings.tunnelTitle': '全局隧道代理',
                 'settings.tunnelLabel': '隧道地址',
-                'settings.tunnelHint': '作为账号默认出口，支持 Bright Data/Luminati、Rola、Oxylabs 等 HTTP/HTTPS/SOCKS 隧道。账号单独配置会覆盖这里；已绑定 Clash 节点的账号仍优先走节点，失败时可回退隧道。',
+                'settings.tunnelHint': '作为账号默认出口，支持 Bright Data/Luminati、Rola、Oxylabs 等 HTTP/HTTPS/SOCKS 隧道。可在用户名或参数里写 {session}，断开达到阈值后自动轮换。',
+                'settings.tunnelRefreshEnabled': '断线自动刷新',
+                'settings.tunnelFailureThreshold': '连续失败阈值',
+                'settings.tunnelCooldownSec': '刷新冷却(秒)',
                 'settings.dnsOverrideTitle': 'DNS 覆盖（抗污染）',
                 'settings.dnsStrategy': 'DNS 策略',
                 'settings.dnsStrategyHint': '保存后会立即重载缓存订阅。账号测试会严格显示当前策略下节点真实连接结果。',
@@ -1805,7 +1823,10 @@
                 'settings.testEndpointAuto': 'Auto (fallback)',
                 'settings.tunnelTitle': 'Global Tunnel Proxy',
                 'settings.tunnelLabel': 'Tunnel URL',
-                'settings.tunnelHint': 'Default account egress for Bright Data/Luminati, Rola, Oxylabs, and similar HTTP/HTTPS/SOCKS tunnel providers. Per-account tunnel overrides this. Accounts with Clash nodes still prefer the node and can fall back to the tunnel.',
+                'settings.tunnelHint': 'Default account egress for Bright Data/Luminati, Rola, Oxylabs, and similar HTTP/HTTPS/SOCKS tunnel providers. Put {session} in username or params to rotate after repeated disconnects.',
+                'settings.tunnelRefreshEnabled': 'Auto-refresh on disconnect',
+                'settings.tunnelFailureThreshold': 'Failure threshold',
+                'settings.tunnelCooldownSec': 'Refresh cooldown (sec)',
                 'settings.dnsOverrideTitle': 'DNS Overrides',
                 'settings.dnsStrategy': 'DNS Strategy',
                 'settings.dnsStrategyHint': 'Saving reloads cached subscription nodes immediately. Account tests show the selected node result under this strategy.',
@@ -2259,7 +2280,7 @@
                 '<button class="btn btn-sm btn-primary" onclick="saveProxy(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
                 '</div><div style="font-size:12px;color:#64748b;margin-top:6px">' + t('detail.proxyHint') + '</div></div>' +
                 '<div class="detail-section"><h4>' + t('detail.tunnel') + '</h4><div class="machine-id-row">' +
-                '<input type="text" id="tunnelProxyUrlInput" value="' + (a.tunnelProxyUrl || '').replace(/"/g, '&quot;') + '" placeholder="http://user:pass@brd.superproxy.io:22225">' +
+                '<input type="text" id="tunnelProxyUrlInput" value="' + (a.tunnelProxyUrl || '').replace(/"/g, '&quot;') + '" placeholder="http://user-session-{session}:pass@brd.superproxy.io:22225">' +
                 '<button class="btn btn-sm btn-secondary" onclick="clearTunnelProxy()">' + t('detail.proxyDirect') + '</button>' +
                 '<button class="btn btn-sm btn-primary" onclick="saveTunnelProxy(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
                 '</div><div style="font-size:12px;color:#64748b;margin-top:6px">' + t('detail.tunnelHint') + '</div></div>' +
@@ -2573,6 +2594,24 @@
                 const d = await r.json();
                 const el = document.getElementById('globalTunnelUrl');
                 if (el) el.value = d.url || '';
+                const refresh = d.refresh || {};
+                const enabled = document.getElementById('tunnelRefreshEnabled');
+                if (enabled) enabled.checked = refresh.enabled !== false;
+                const failure = document.getElementById('tunnelFailureThreshold');
+                if (failure) failure.value = refresh.failureThreshold || 3;
+                const cooldown = document.getElementById('tunnelCooldownSec');
+                if (cooldown) cooldown.value = refresh.cooldownSec || 60;
+                const runtime = document.getElementById('tunnelRuntime');
+                if (runtime) {
+                    const rt = d.runtime || {};
+                    const parts = [];
+                    if (rt.session) parts.push('session=' + rt.session);
+                    parts.push('failures=' + (rt.failures || 0));
+                    if (rt.refreshedAt) parts.push('refreshed=' + new Date(rt.refreshedAt * 1000).toLocaleString());
+                    if (rt.cooldownUntil && rt.cooldownUntil > Date.now() / 1000) parts.push('cooldown=' + Math.ceil(rt.cooldownUntil - Date.now() / 1000) + 's');
+                    if (rt.lastError) parts.push('last=' + rt.lastError);
+                    runtime.textContent = parts.join(' · ');
+                }
             } catch (e) {}
         }
         function clearTunnel() {
@@ -2588,10 +2627,15 @@
                 return;
             }
             try {
+                const refresh = {
+                    enabled: !!document.getElementById('tunnelRefreshEnabled')?.checked,
+                    failureThreshold: Math.max(1, parseInt(document.getElementById('tunnelFailureThreshold')?.value || '3', 10) || 3),
+                    cooldownSec: Math.max(1, parseInt(document.getElementById('tunnelCooldownSec')?.value || '60', 10) || 60)
+                };
                 const r = await fetch('/admin/api/tunnel', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
-                    body: JSON.stringify({ url })
+                    body: JSON.stringify({ url, refresh })
                 });
                 const d = await r.json().catch(() => ({}));
                 if (!r.ok || !d.success) throw new Error(d.error || 'save failed');

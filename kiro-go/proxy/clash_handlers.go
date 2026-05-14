@@ -25,12 +25,17 @@ func (h *Handler) apiGetOutbound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) apiGetTunnel(w http.ResponseWriter, r *http.Request) {
-	_ = json.NewEncoder(w).Encode(map[string]string{"url": config.GetGlobalTunnelProxy()})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"url":     config.GetGlobalTunnelProxy(),
+		"refresh": config.GetTunnelRefreshConfig(),
+		"runtime": config.GetTunnelRuntimeStatus("global"),
+	})
 }
 
 func (h *Handler) apiUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		URL string `json:"url"`
+		URL     string                      `json:"url"`
+		Refresh *config.TunnelRefreshConfig `json:"refresh"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(400)
@@ -49,6 +54,13 @@ func (h *Handler) apiUpdateTunnel(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
+	}
+	if req.Refresh != nil {
+		if err := config.UpdateTunnelRefreshConfig(*req.Refresh); err != nil {
+			w.WriteHeader(500)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
@@ -88,7 +100,7 @@ func (h *Handler) apiUpdateOutbound(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateProxyURL(raw string) error {
-	u, err := url.Parse(raw)
+	u, err := url.Parse(strings.ReplaceAll(raw, "{session}", "kirotest"))
 	if err != nil {
 		return err
 	}
@@ -362,7 +374,7 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 	if r.URL.Query().Get("fallback") == "1" {
 		client = clash.PickAccountClient(acc)
 	} else if strings.TrimSpace(acc.TunnelProxyURL) != "" {
-		client = config.GetAccountHTTPClient(acc.TunnelProxyURL)
+		client = clash.PickAccountClient(acc)
 	} else if acc.ProxyNode != "" && clash.Default().Has(acc.ProxyNode) {
 		var err error
 		client, err = clash.ClientForNode(acc.ProxyNode, 30*time.Second)
@@ -372,7 +384,7 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 	} else if acc.ProxyURL != "" {
 		client = config.GetAccountHTTPClient(acc.ProxyURL)
 	} else {
-		client = config.GetAccountHTTPClient(config.GetGlobalTunnelProxy())
+		client = clash.PickAccountClient(acc)
 	}
 
 	res := runProxyTest(client, r.URL.Query().Get("endpoint"))

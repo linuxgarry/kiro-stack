@@ -18,6 +18,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // GenerateMachineId generates a UUID v4 format machine identifier.
@@ -135,6 +137,10 @@ type Config struct {
 	// that do not have their own TunnelProxyURL and do not bind a Clash node.
 	GlobalTunnelProxy string `json:"globalTunnelProxy,omitempty"`
 
+	// TunnelRefresh controls runtime tunnel session rotation when a tunnel
+	// keeps disconnecting. It works best with URLs containing "{session}".
+	TunnelRefresh TunnelRefreshConfig `json:"tunnelRefresh,omitempty"`
+
 	// DNSOverrides maps poisoned proxy hostnames to known-good IP addresses.
 	// Exact hostnames and wildcard suffixes like "*.example.com" are supported.
 	DNSOverrides map[string]string `json:"dnsOverrides,omitempty"`
@@ -171,6 +177,35 @@ type CircuitBreakerConfig struct {
 	HalfOpenMaxSuccess int     `json:"halfOpenMaxSuccess"`
 	ErrorRateThreshold float64 `json:"errorRateThreshold"`
 	ErrorRateMinReqs   int     `json:"errorRateMinReqs"`
+}
+
+// TunnelRefreshConfig controls tunnel session refresh behavior.
+type TunnelRefreshConfig struct {
+	Enabled          bool `json:"enabled"`
+	FailureThreshold int  `json:"failureThreshold"`
+	CooldownSec      int  `json:"cooldownSec"`
+}
+
+func DefaultTunnelRefreshConfig() TunnelRefreshConfig {
+	return TunnelRefreshConfig{
+		Enabled:          true,
+		FailureThreshold: 3,
+		CooldownSec:      60,
+	}
+}
+
+func normalizeTunnelRefreshConfig(c TunnelRefreshConfig) TunnelRefreshConfig {
+	def := DefaultTunnelRefreshConfig()
+	if c == (TunnelRefreshConfig{}) {
+		return def
+	}
+	if c.FailureThreshold <= 0 {
+		c.FailureThreshold = def.FailureThreshold
+	}
+	if c.CooldownSec <= 0 {
+		c.CooldownSec = def.CooldownSec
+	}
+	return c
 }
 
 func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
@@ -232,12 +267,14 @@ type AccountInfo struct {
 }
 
 // Version 当前版本号
-const Version = "2.6.4"
+const Version = "2.6.5"
 
 var (
-	cfg     *Config
-	cfgLock sync.RWMutex
-	cfgPath string
+	cfg           *Config
+	cfgLock       sync.RWMutex
+	cfgPath       string
+	tunnelStates  sync.Map
+	sessionSerial int64
 )
 
 // Init initializes the configuration system with the specified file path.
@@ -263,6 +300,7 @@ func Load() error {
 				RequireApiKey:  false,
 				Accounts:       []Account{},
 				CircuitBreaker: DefaultCircuitBreakerConfig(),
+				TunnelRefresh:  DefaultTunnelRefreshConfig(),
 			}
 			return Save()
 		}
@@ -284,6 +322,11 @@ func Load() error {
 	normalizedBreaker := normalizeCircuitBreakerConfig(c.CircuitBreaker)
 	if normalizedBreaker != c.CircuitBreaker {
 		c.CircuitBreaker = normalizedBreaker
+		changed = true
+	}
+	normalizedTunnelRefresh := normalizeTunnelRefreshConfig(c.TunnelRefresh)
+	if normalizedTunnelRefresh != c.TunnelRefresh {
+		c.TunnelRefresh = normalizedTunnelRefresh
 		changed = true
 	}
 	cfg = &c
@@ -631,9 +674,137 @@ func UpdateGlobalTunnelProxy(url string) error {
 // otherwise the global tunnel proxy.
 func EffectiveTunnelProxy(account *Account) string {
 	if account != nil && strings.TrimSpace(account.TunnelProxyURL) != "" {
-		return strings.TrimSpace(account.TunnelProxyURL)
+		return ResolveTunnelProxy("account:"+account.ID, strings.TrimSpace(account.TunnelProxyURL))
 	}
-	return strings.TrimSpace(GetGlobalTunnelProxy())
+	return ResolveTunnelProxy("global", strings.TrimSpace(GetGlobalTunnelProxy()))
+}
+
+type TunnelProxyRef struct {
+	URL       string
+	RawURL    string
+	Scope     string
+	IsAccount bool
+}
+
+// EffectiveTunnelProxyRef returns the selected tunnel URL plus runtime metadata.
+func EffectiveTunnelProxyRef(account *Account) TunnelProxyRef {
+	if account != nil && strings.TrimSpace(account.TunnelProxyURL) != "" {
+		raw := strings.TrimSpace(account.TunnelProxyURL)
+		scope := "account:" + account.ID
+		return TunnelProxyRef{URL: ResolveTunnelProxy(scope, raw), RawURL: raw, Scope: scope, IsAccount: true}
+	}
+	raw := strings.TrimSpace(GetGlobalTunnelProxy())
+	if raw == "" {
+		return TunnelProxyRef{}
+	}
+	return TunnelProxyRef{URL: ResolveTunnelProxy("global", raw), RawURL: raw, Scope: "global"}
+}
+
+type tunnelRuntimeState struct {
+	Session     string
+	Failures    int
+	RefreshedAt int64
+	CooldownTil int64
+	LastError   string
+}
+
+type TunnelRuntimeStatus struct {
+	Scope       string `json:"scope"`
+	Session     string `json:"session,omitempty"`
+	Failures    int    `json:"failures"`
+	RefreshedAt int64  `json:"refreshedAt,omitempty"`
+	CooldownTil int64  `json:"cooldownUntil,omitempty"`
+	LastError   string `json:"lastError,omitempty"`
+}
+
+// ResolveTunnelProxy applies the current runtime session to a tunnel URL.
+func ResolveTunnelProxy(scope, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "{session}") {
+		return raw
+	}
+	st := getTunnelState(scope)
+	if st.Session == "" {
+		st.Session = newTunnelSession(scope)
+		tunnelStates.Store(scope, st)
+	}
+	return strings.ReplaceAll(raw, "{session}", st.Session)
+}
+
+// RecordTunnelResult updates runtime tunnel failure counters. When the URL has
+// a {session} placeholder and enough disconnects happen, a new session is
+// generated for subsequent requests.
+func RecordTunnelResult(scope, raw string, err error) {
+	if scope == "" || strings.TrimSpace(raw) == "" {
+		return
+	}
+	cfg := GetTunnelRefreshConfig()
+	if !cfg.Enabled {
+		return
+	}
+	st := getTunnelState(scope)
+	if err == nil {
+		st.Failures = 0
+		st.LastError = ""
+		tunnelStates.Store(scope, st)
+		return
+	}
+	st.Failures++
+	st.LastError = err.Error()
+	now := time.Now().Unix()
+	if st.Failures >= cfg.FailureThreshold && now >= st.CooldownTil {
+		if strings.Contains(raw, "{session}") {
+			st.Session = newTunnelSession(scope)
+			st.RefreshedAt = now
+		}
+		st.Failures = 0
+		st.CooldownTil = now + int64(cfg.CooldownSec)
+	}
+	tunnelStates.Store(scope, st)
+}
+
+func GetTunnelRuntimeStatus(scope string) TunnelRuntimeStatus {
+	st := getTunnelState(scope)
+	return TunnelRuntimeStatus{
+		Scope:       scope,
+		Session:     st.Session,
+		Failures:    st.Failures,
+		RefreshedAt: st.RefreshedAt,
+		CooldownTil: st.CooldownTil,
+		LastError:   st.LastError,
+	}
+}
+
+func getTunnelState(scope string) tunnelRuntimeState {
+	if v, ok := tunnelStates.Load(scope); ok {
+		return v.(tunnelRuntimeState)
+	}
+	return tunnelRuntimeState{}
+}
+
+func newTunnelSession(scope string) string {
+	n := atomic.AddInt64(&sessionSerial, 1)
+	cleanScope := strings.NewReplacer(":", "-", "@", "-", ".", "-", "_", "-").Replace(scope)
+	return fmt.Sprintf("kiro-%s-%d-%d", cleanScope, time.Now().Unix(), n)
+}
+
+func GetTunnelRefreshConfig() TunnelRefreshConfig {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return DefaultTunnelRefreshConfig()
+	}
+	return normalizeTunnelRefreshConfig(cfg.TunnelRefresh)
+}
+
+func UpdateTunnelRefreshConfig(in TunnelRefreshConfig) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.TunnelRefresh = normalizeTunnelRefreshConfig(in)
+	return Save()
 }
 
 // GetDNSOverrides returns a copy of the hostname-to-IP override table.

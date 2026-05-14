@@ -29,8 +29,8 @@ import (
 // account.ProxyURL when present, otherwise through the global jump. This keeps
 // a bad Clash node from taking real Kiro calls down when the jump is healthy.
 func PickAccountClient(account *config.Account) *http.Client {
-	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" && (account == nil || strings.TrimSpace(account.TunnelProxyURL) != "" || strings.TrimSpace(account.ProxyNode) == "") {
-		return config.GetAccountHTTPClient(tunnel)
+	if ref := config.EffectiveTunnelProxyRef(account); ref.URL != "" && (account == nil || ref.IsAccount || strings.TrimSpace(account.ProxyNode) == "") {
+		return withTunnelRefresh(config.GetAccountHTTPClient(ref.URL), ref)
 	}
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 30*time.Second); err == nil {
@@ -44,14 +44,18 @@ func PickAccountClient(account *config.Account) *http.Client {
 	if proxyURL == "" {
 		proxyURL = config.GetGlobalTunnelProxy()
 	}
+	if proxyURL == config.GetGlobalTunnelProxy() && proxyURL != "" {
+		ref := config.EffectiveTunnelProxyRef(account)
+		return withTunnelRefresh(config.GetAccountHTTPClient(ref.URL), ref)
+	}
 	return config.GetAccountHTTPClient(proxyURL)
 }
 
 // PickAccountStreamClient is the long-timeout variant for streaming Kiro API
 // calls. Same resolution order as PickAccountClient.
 func PickAccountStreamClient(account *config.Account) *http.Client {
-	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" && (account == nil || strings.TrimSpace(account.TunnelProxyURL) != "" || strings.TrimSpace(account.ProxyNode) == "") {
-		return config.GetKiroStreamHTTPClient(tunnel)
+	if ref := config.EffectiveTunnelProxyRef(account); ref.URL != "" && (account == nil || ref.IsAccount || strings.TrimSpace(account.ProxyNode) == "") {
+		return withTunnelRefresh(config.GetKiroStreamHTTPClient(ref.URL), ref)
 	}
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 5*time.Minute); err == nil {
@@ -64,6 +68,10 @@ func PickAccountStreamClient(account *config.Account) *http.Client {
 	}
 	if proxyURL == "" {
 		proxyURL = config.GetGlobalTunnelProxy()
+	}
+	if proxyURL == config.GetGlobalTunnelProxy() && proxyURL != "" {
+		ref := config.EffectiveTunnelProxyRef(account)
+		return withTunnelRefresh(config.GetKiroStreamHTTPClient(ref.URL), ref)
 	}
 	return config.GetKiroStreamHTTPClient(proxyURL)
 }
@@ -90,10 +98,10 @@ func withRuntimeFallback(primary *http.Client, account *config.Account, timeout 
 }
 
 func fallbackTransportFor(account *config.Account, timeout time.Duration) (string, http.RoundTripper) {
-	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" {
-		c := config.GetHTTPClient(tunnel, timeout, 50, 10)
+	if ref := config.EffectiveTunnelProxyRef(account); ref.URL != "" {
+		c := withTunnelRefresh(config.GetHTTPClient(ref.URL, timeout, 50, 10), ref)
 		if c != nil && c.Transport != nil {
-			if account != nil && strings.TrimSpace(account.TunnelProxyURL) != "" {
+			if ref.IsAccount {
 				return "account tunnel", c.Transport
 			}
 			return "global tunnel", c.Transport
@@ -109,6 +117,40 @@ func fallbackTransportFor(account *config.Account, timeout time.Duration) (strin
 		return "global jump", c.Transport
 	}
 	return "", nil
+}
+
+func withTunnelRefresh(client *http.Client, ref config.TunnelProxyRef) *http.Client {
+	if client == nil || client.Transport == nil || ref.Scope == "" || ref.RawURL == "" {
+		return client
+	}
+	return &http.Client{
+		Timeout: client.Timeout,
+		Transport: &tunnelRefreshRoundTripper{
+			base: client.Transport,
+			ref:  ref,
+		},
+		CheckRedirect: client.CheckRedirect,
+		Jar:           client.Jar,
+	}
+}
+
+type tunnelRefreshRoundTripper struct {
+	base http.RoundTripper
+	ref  config.TunnelProxyRef
+}
+
+func (rt *tunnelRefreshRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := rt.base.RoundTrip(req)
+	if err != nil {
+		config.RecordTunnelResult(rt.ref.Scope, rt.ref.RawURL, err)
+		return resp, err
+	}
+	if resp != nil && (resp.StatusCode == http.StatusProxyAuthRequired || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+		config.RecordTunnelResult(rt.ref.Scope, rt.ref.RawURL, fmt.Errorf("HTTP %d", resp.StatusCode))
+	} else {
+		config.RecordTunnelResult(rt.ref.Scope, rt.ref.RawURL, nil)
+	}
+	return resp, err
 }
 
 type fallbackRoundTripper struct {

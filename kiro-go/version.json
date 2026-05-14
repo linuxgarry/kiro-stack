@@ -1,5 +1,5 @@
 {
-  "version": "2.6.4",
-  "changelog": "🌐 新增全局隧道代理配置，支持 Luminati/Bright Data、Rola 等 HTTP/SOCKS 隧道\n👤 账号详情新增账号专属隧道代理，可覆盖全局隧道\n🔁 Clash 节点失败时可回退到账号/全局隧道，和 Clash 订阅并存",
+  "version": "2.6.5",
+  "changelog": "♻️ 隧道代理新增断线自动刷新，可用 {session} 占位自动轮换会话\n🧯 连续 EOF/timeout/407/429/5xx 达到阈值后刷新隧道 session，并带冷却保护\n📊 设置页显示当前全局隧道 session、失败次数、刷新时间和最近错误",
   "download": "https://github.com/Quorinex/Kiro-Go"
 }
