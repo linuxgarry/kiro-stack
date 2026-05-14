@@ -14,9 +14,11 @@ import (
 
 // PickAccountClient returns the short-lived HTTP client appropriate for the
 // given account. Resolution order:
-//  1. account.ProxyNode (Clash node from loaded subscription)
-//  2. account.ProxyURL  (raw http/https/socks5 proxy)
-//  3. direct connection (honoring HTTPS_PROXY env if set)
+//  1. account.TunnelProxyURL (paid tunnel provider such as Luminati/Rola)
+//  2. account.ProxyNode      (Clash node from loaded subscription)
+//  3. account.ProxyURL       (legacy raw http/https/socks5 proxy)
+//  4. global tunnel proxy
+//  5. direct connection (honoring HTTPS_PROXY env if set)
 //
 // If ProxyNode is set but the node isn't currently loaded (e.g. after a
 // subscription reload that dropped it), we fall back to ProxyURL → direct
@@ -27,6 +29,9 @@ import (
 // account.ProxyURL when present, otherwise through the global jump. This keeps
 // a bad Clash node from taking real Kiro calls down when the jump is healthy.
 func PickAccountClient(account *config.Account) *http.Client {
+	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" && (account == nil || strings.TrimSpace(account.TunnelProxyURL) != "" || strings.TrimSpace(account.ProxyNode) == "") {
+		return config.GetAccountHTTPClient(tunnel)
+	}
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 30*time.Second); err == nil {
 			return withRuntimeFallback(c, account, 30*time.Second, "clash:"+account.ProxyNode)
@@ -36,12 +41,18 @@ func PickAccountClient(account *config.Account) *http.Client {
 	if account != nil {
 		proxyURL = account.ProxyURL
 	}
+	if proxyURL == "" {
+		proxyURL = config.GetGlobalTunnelProxy()
+	}
 	return config.GetAccountHTTPClient(proxyURL)
 }
 
 // PickAccountStreamClient is the long-timeout variant for streaming Kiro API
 // calls. Same resolution order as PickAccountClient.
 func PickAccountStreamClient(account *config.Account) *http.Client {
+	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" && (account == nil || strings.TrimSpace(account.TunnelProxyURL) != "" || strings.TrimSpace(account.ProxyNode) == "") {
+		return config.GetKiroStreamHTTPClient(tunnel)
+	}
 	if account != nil && account.ProxyNode != "" {
 		if c, err := ClientForNode(account.ProxyNode, 5*time.Minute); err == nil {
 			return withRuntimeFallback(c, account, 5*time.Minute, "clash:"+account.ProxyNode)
@@ -50,6 +61,9 @@ func PickAccountStreamClient(account *config.Account) *http.Client {
 	var proxyURL string
 	if account != nil {
 		proxyURL = account.ProxyURL
+	}
+	if proxyURL == "" {
+		proxyURL = config.GetGlobalTunnelProxy()
 	}
 	return config.GetKiroStreamHTTPClient(proxyURL)
 }
@@ -76,6 +90,15 @@ func withRuntimeFallback(primary *http.Client, account *config.Account, timeout 
 }
 
 func fallbackTransportFor(account *config.Account, timeout time.Duration) (string, http.RoundTripper) {
+	if tunnel := config.EffectiveTunnelProxy(account); tunnel != "" {
+		c := config.GetHTTPClient(tunnel, timeout, 50, 10)
+		if c != nil && c.Transport != nil {
+			if account != nil && strings.TrimSpace(account.TunnelProxyURL) != "" {
+				return "account tunnel", c.Transport
+			}
+			return "global tunnel", c.Transport
+		}
+	}
 	if account != nil && strings.TrimSpace(account.ProxyURL) != "" {
 		c := config.GetHTTPClient(account.ProxyURL, timeout, 50, 10)
 		if c != nil && c.Transport != nil {

@@ -2156,6 +2156,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiUpdateOutbound(w, r)
 	case path == "/outbound/test" && r.Method == "POST":
 		h.apiTestOutbound(w, r)
+	case path == "/tunnel" && r.Method == "GET":
+		h.apiGetTunnel(w, r)
+	case path == "/tunnel" && r.Method == "POST":
+		h.apiUpdateTunnel(w, r)
 	case path == "/dns-overrides" && r.Method == "GET":
 		h.apiGetDNSOverrides(w, r)
 	case path == "/dns-overrides" && r.Method == "POST":
@@ -2212,6 +2216,7 @@ func (h *Handler) apiGetAccounts(w http.ResponseWriter, r *http.Request) {
 			"hasToken":          a.AccessToken != "",
 			"machineId":         a.MachineId,
 			"proxyUrl":          a.ProxyURL,
+			"tunnelProxyUrl":    a.TunnelProxyURL,
 			"proxyNode":         a.ProxyNode,
 			"subscriptionType":  a.SubscriptionType,
 			"subscriptionTitle": a.SubscriptionTitle,
@@ -2318,15 +2323,24 @@ func (h *Handler) apiUpdateAccount(w http.ResponseWriter, r *http.Request, id st
 	if v, ok := updates["proxyUrl"].(string); ok {
 		trimmed := strings.TrimSpace(v)
 		if trimmed != "" {
-			u, err := url.Parse(trimmed)
-			if err != nil || u.Scheme == "" || u.Host == "" ||
-				(u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") {
+			if err := validateProxyURL(trimmed); err != nil {
 				w.WriteHeader(400)
 				json.NewEncoder(w).Encode(map[string]string{"error": "Invalid proxyUrl, expected http(s)://host:port or socks5://host:port"})
 				return
 			}
 		}
 		existing.ProxyURL = trimmed
+	}
+	if v, ok := updates["tunnelProxyUrl"].(string); ok {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			if err := validateProxyURL(trimmed); err != nil {
+				w.WriteHeader(400)
+				json.NewEncoder(w).Encode(map[string]string{"error": "Invalid tunnelProxyUrl, expected http(s)://host:port or socks5://host:port"})
+				return
+			}
+		}
+		existing.TunnelProxyURL = trimmed
 	}
 	if v, ok := updates["proxyNode"].(string); ok {
 		trimmed := strings.TrimSpace(v)

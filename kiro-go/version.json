@@ -1,5 +1,5 @@
 {
-  "version": "2.6.3",
-  "changelog": "🧭 后台设置页新增 DNS 策略切换：auto / global / china / system / off\n🔁 保存 DNS 策略后立即重载缓存订阅节点\n🛡️ system 策略会拒绝 127.0.0.1、内网、链路本地等污染结果",
+  "version": "2.6.4",
+  "changelog": "🌐 新增全局隧道代理配置，支持 Luminati/Bright Data、Rola 等 HTTP/SOCKS 隧道\n👤 账号详情新增账号专属隧道代理，可覆盖全局隧道\n🔁 Clash 节点失败时可回退到账号/全局隧道，和 Clash 订阅并存",
   "download": "https://github.com/Quorinex/Kiro-Go"
 }

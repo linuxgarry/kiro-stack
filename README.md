@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.4** | 全局/账号隧道代理，支持 Luminati/Bright Data、Rola 等 HTTP/SOCKS 隧道 |
 | 🆕 **v2.6.3** | 后台新增 DNS 策略切换：auto/global/china/system/off |
 | 🆕 **v2.6.2** | 账号卡测试默认严格测节点真实出口，不再被业务 fallback 掩盖 |
 | 🆕 **v2.6.1** | DNS 覆盖表 · 代理测试显式标记 fallback · AliDNS/DNSPod DoH |
@@ -19,6 +20,22 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🌐 v2.6.4 — 隧道代理并存 / Tunnel proxies alongside Clash
+
+后台新增「全局隧道代理」，账号详情新增「账号隧道代理」。它们面向 Bright Data/Luminati、Rola、Oxylabs 等主流隧道代理服务，支持 `http://user:pass@host:port`、`https://...`、`socks5://...`、`socks5h://...`。
+
+出口选择顺序：
+
+- 账号专属隧道
+- Clash 订阅节点
+- 老的账号代理 `proxyUrl`
+- 全局隧道代理
+- 直连
+
+如果账号绑定了 Clash 节点，业务请求仍优先走节点；节点出现 EOF、timeout、connection refused 等传输错误时，会优先回退到账号/全局隧道。账号卡严格测试默认只测当前主出口，避免把回退出口误判成节点出口。
 
 ---
 

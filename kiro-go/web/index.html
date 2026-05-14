@@ -1264,6 +1264,19 @@
                 </div>
             </div>
             <div class="card">
+                <div class="card-header"><span class="card-title" data-i18n="settings.tunnelTitle"></span></div>
+                <div class="form-group">
+                    <label data-i18n="settings.tunnelLabel"></label>
+                    <input type="text" id="globalTunnelUrl" placeholder="http://user:pass@brd.superproxy.io:22225">
+                    <small style="color:#64748b;font-size:11px;display:block;margin-top:4px" data-i18n="settings.tunnelHint"></small>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="saveTunnel()" data-i18n="common.save"></button>
+                    <button class="btn btn-secondary" onclick="clearTunnel()" data-i18n="common.clear"></button>
+                    <span id="tunnelResult" style="font-size:12px;color:#64748b"></span>
+                </div>
+            </div>
+            <div class="card">
                 <div class="card-header">
                     <span class="card-title" data-i18n="settings.dnsOverrideTitle"></span>
                     <button class="btn btn-sm btn-primary" onclick="saveDNSOverrides()" data-i18n="common.save"></button>
@@ -1506,6 +1519,8 @@
                 'detail.proxyHint': '格式：http://host:port、https://host:port 或 socks5://host:port；留空则直连',
                 'detail.proxyInvalid': '代理 URL 格式错误，请使用 http(s):// 或 socks5://',
                 'detail.proxyDirect': '直连',
+                'detail.tunnel': '账号隧道代理',
+                'detail.tunnelHint': '优先级最高，适合 Bright Data/Luminati、Rola 等隧道。示例：http://user:pass@host:port',
                 'clash.title': 'Clash 订阅（全局）',
                 'clash.hint': '填入订阅链接后点「保存并加载」，下方账号卡片里会出现节点下拉。支持 ss/vmess/vless/trojan/hysteria2/tuic 等 Clash 内核协议。',
                 'clash.save': '保存并加载',
@@ -1526,6 +1541,9 @@
                 'settings.outboundTest': '测试',
                 'settings.testEndpoint': '测试接口:',
                 'settings.testEndpointAuto': '自动 (依次回退)',
+                'settings.tunnelTitle': '全局隧道代理',
+                'settings.tunnelLabel': '隧道地址',
+                'settings.tunnelHint': '作为账号默认出口，支持 Bright Data/Luminati、Rola、Oxylabs 等 HTTP/HTTPS/SOCKS 隧道。账号单独配置会覆盖这里；已绑定 Clash 节点的账号仍优先走节点，失败时可回退隧道。',
                 'settings.dnsOverrideTitle': 'DNS 覆盖（抗污染）',
                 'settings.dnsStrategy': 'DNS 策略',
                 'settings.dnsStrategyHint': '保存后会立即重载缓存订阅。账号测试会严格显示当前策略下节点真实连接结果。',
@@ -1597,6 +1615,7 @@
                 'common.saved': '保存',
                 'common.copy': '复制',
                 'common.copied': '已复制',
+                'common.clear': '清空',
                 'common.cancel': '取消',
                 'common.back': '返回',
                 'common.add': '添加',
@@ -1762,6 +1781,8 @@
                 'detail.proxyHint': 'Format: http://host:port, https://host:port, or socks5://host:port. Leave empty for direct connection.',
                 'detail.proxyInvalid': 'Invalid proxy URL. Use http(s):// or socks5://',
                 'detail.proxyDirect': 'Direct',
+                'detail.tunnel': 'Account Tunnel Proxy',
+                'detail.tunnelHint': 'Highest priority. Good for Bright Data/Luminati, Rola, and similar tunnel providers. Example: http://user:pass@host:port',
                 'clash.title': 'Clash Subscription (Global)',
                 'clash.hint': 'Paste a subscription URL and click "Save & Load". A node dropdown will appear on each account card. Supports ss/vmess/vless/trojan/hysteria2/tuic and other Clash-core protocols.',
                 'clash.save': 'Save & Load',
@@ -1782,6 +1803,9 @@
                 'settings.outboundTest': 'Test',
                 'settings.testEndpoint': 'Test endpoint:',
                 'settings.testEndpointAuto': 'Auto (fallback)',
+                'settings.tunnelTitle': 'Global Tunnel Proxy',
+                'settings.tunnelLabel': 'Tunnel URL',
+                'settings.tunnelHint': 'Default account egress for Bright Data/Luminati, Rola, Oxylabs, and similar HTTP/HTTPS/SOCKS tunnel providers. Per-account tunnel overrides this. Accounts with Clash nodes still prefer the node and can fall back to the tunnel.',
                 'settings.dnsOverrideTitle': 'DNS Overrides',
                 'settings.dnsStrategy': 'DNS Strategy',
                 'settings.dnsStrategyHint': 'Saving reloads cached subscription nodes immediately. Account tests show the selected node result under this strategy.',
@@ -1853,6 +1877,7 @@
                 'common.saved': 'Saved',
                 'common.copy': 'Copy',
                 'common.copied': 'Copied',
+                'common.clear': 'Clear',
                 'common.cancel': 'Cancel',
                 'common.back': 'Back',
                 'common.add': 'Add',
@@ -2233,6 +2258,11 @@
                 '<button class="btn btn-sm btn-secondary" onclick="clearProxy()">' + t('detail.proxyDirect') + '</button>' +
                 '<button class="btn btn-sm btn-primary" onclick="saveProxy(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
                 '</div><div style="font-size:12px;color:#64748b;margin-top:6px">' + t('detail.proxyHint') + '</div></div>' +
+                '<div class="detail-section"><h4>' + t('detail.tunnel') + '</h4><div class="machine-id-row">' +
+                '<input type="text" id="tunnelProxyUrlInput" value="' + (a.tunnelProxyUrl || '').replace(/"/g, '&quot;') + '" placeholder="http://user:pass@brd.superproxy.io:22225">' +
+                '<button class="btn btn-sm btn-secondary" onclick="clearTunnelProxy()">' + t('detail.proxyDirect') + '</button>' +
+                '<button class="btn btn-sm btn-primary" onclick="saveTunnelProxy(\'' + id + '\')">' + t('common.saved').split(' ')[0] + '</button>' +
+                '</div><div style="font-size:12px;color:#64748b;margin-top:6px">' + t('detail.tunnelHint') + '</div></div>' +
                 '<div class="detail-section"><h4>' + t('detail.subscription') + '</h4><div class="detail-grid">' +
                 '<div class="detail-item"><div class="detail-label">' + t('detail.subscriptionType') + '</div><div class="detail-value">' + (a.subscriptionTitle || a.subscriptionType || '-') + '</div></div>' +
                 '<div class="detail-item"><div class="detail-label">' + t('detail.tokenExpiry') + '</div><div class="detail-value">' + (a.expiresAt ? new Date(a.expiresAt * 1000).toLocaleString() : '-') + '</div></div>' +
@@ -2304,15 +2334,36 @@
             const inp = document.getElementById('proxyUrlInput');
             if (inp) inp.value = '';
         }
+        function isProxyUrlValid(url) {
+            return !url || /^(https?|socks5h?):\/\/[^\s/]+/i.test(url);
+        }
         async function saveProxy(id) {
             const proxyUrl = document.getElementById('proxyUrlInput').value.trim();
-            if (proxyUrl && !/^(https?|socks5h?):\/\/[^\s/]+/i.test(proxyUrl)) {
+            if (!isProxyUrlValid(proxyUrl)) {
                 alert(t('detail.proxyInvalid')); return;
             }
             try {
                 const res = await fetch('/admin/api/accounts/' + id, {
                     method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
                     body: JSON.stringify({ proxyUrl })
+                });
+                const d = await res.json();
+                if (d.success) { alert(t('detail.saved')); loadAccounts(); } else { alert(t('detail.saveFailed') + ': ' + (d.error || '')); }
+            } catch (e) { alert(t('detail.saveFailed')); }
+        }
+        function clearTunnelProxy() {
+            const inp = document.getElementById('tunnelProxyUrlInput');
+            if (inp) inp.value = '';
+        }
+        async function saveTunnelProxy(id) {
+            const tunnelProxyUrl = document.getElementById('tunnelProxyUrlInput').value.trim();
+            if (!isProxyUrlValid(tunnelProxyUrl)) {
+                alert(t('detail.proxyInvalid')); return;
+            }
+            try {
+                const res = await fetch('/admin/api/accounts/' + id, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                    body: JSON.stringify({ tunnelProxyUrl })
                 });
                 const d = await res.json();
                 if (d.success) { alert(t('detail.saved')); loadAccounts(); } else { alert(t('detail.saveFailed') + ': ' + (d.error || '')); }
@@ -2380,7 +2431,7 @@
                 '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
                 '<button class="btn btn-sm btn-danger" onclick="openBreakerAccount(\'' + a.id + '\')">' + t('breaker.open') + '</button>' +
                 '<button class="btn btn-sm btn-secondary" onclick="closeBreakerAccount(\'' + a.id + '\')">' + t('breaker.close') + '</button>' +
-                '<span style="font-size:12px;color:#64748b;margin-left:auto">' + (a.proxyNode || a.proxyUrl || t('accounts.proxyDirect')) + '</span>' +
+                '<span style="font-size:12px;color:#64748b;margin-left:auto">' + (a.tunnelProxyUrl ? 'tunnel' : (a.proxyNode || a.proxyUrl || t('accounts.proxyDirect'))) + '</span>' +
                 '</div>' +
                 '</div>';
         }
@@ -2450,6 +2501,7 @@
             loadThinkingConfig();
             loadEndpointConfig();
             loadOutbound();
+            loadTunnel();
             loadDNSStrategy();
             loadDNSOverrides();
             loadMapping();
@@ -2513,6 +2565,48 @@
             } catch (e) {
                 result.style.color = '#ef4444';
                 result.textContent = (t('accounts.proxyTestFail') || 'Failed') + ': ' + e.message;
+            }
+        }
+        async function loadTunnel() {
+            try {
+                const r = await fetch('/admin/api/tunnel', { headers: { 'X-Admin-Password': password } });
+                const d = await r.json();
+                const el = document.getElementById('globalTunnelUrl');
+                if (el) el.value = d.url || '';
+            } catch (e) {}
+        }
+        function clearTunnel() {
+            const el = document.getElementById('globalTunnelUrl');
+            if (el) el.value = '';
+        }
+        async function saveTunnel() {
+            const el = document.getElementById('globalTunnelUrl');
+            const url = (el ? el.value : '').trim();
+            const result = document.getElementById('tunnelResult');
+            if (!isProxyUrlValid(url)) {
+                alert(t('detail.proxyInvalid'));
+                return;
+            }
+            try {
+                const r = await fetch('/admin/api/tunnel', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                    body: JSON.stringify({ url })
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.success) throw new Error(d.error || 'save failed');
+                if (result) {
+                    result.style.color = '#059669';
+                    result.textContent = t('common.saved');
+                }
+                await loadAccounts();
+            } catch (e) {
+                if (result) {
+                    result.style.color = '#ef4444';
+                    result.textContent = t('common.saveFailed') + ': ' + e.message;
+                } else {
+                    alert(t('detail.saveFailed') + ': ' + e.message);
+                }
             }
         }
         async function loadDNSOverrides() {

@@ -68,6 +68,10 @@ type Account struct {
 
 	// Per-account proxy (http/https/socks5 URL). Empty string = direct connection.
 	ProxyURL string `json:"proxyUrl,omitempty"`
+	// Per-account tunnel proxy. This is intended for paid tunnel providers
+	// such as Bright Data/Luminati, Rola, Oxylabs, etc. It takes precedence
+	// over Clash nodes when non-empty.
+	TunnelProxyURL string `json:"tunnelProxyUrl,omitempty"`
 	// Per-account Clash node name (must exist in the loaded subscription).
 	// Takes precedence over ProxyURL when non-empty.
 	ProxyNode string `json:"proxyNode,omitempty"`
@@ -126,6 +130,10 @@ type Config struct {
 	// jump host for fetching the Clash subscription. Useful on VPS where
 	// the provider blocks direct access to certain CDNs.
 	GlobalOutboundProxy string `json:"globalOutboundProxy,omitempty"`
+
+	// GlobalTunnelProxy is the default paid tunnel proxy used by accounts
+	// that do not have their own TunnelProxyURL and do not bind a Clash node.
+	GlobalTunnelProxy string `json:"globalTunnelProxy,omitempty"`
 
 	// DNSOverrides maps poisoned proxy hostnames to known-good IP addresses.
 	// Exact hostnames and wildcard suffixes like "*.example.com" are supported.
@@ -224,7 +232,7 @@ type AccountInfo struct {
 }
 
 // Version 当前版本号
-const Version = "2.6.3"
+const Version = "2.6.4"
 
 var (
 	cfg     *Config
@@ -599,6 +607,33 @@ func UpdateGlobalOutboundProxy(url string) error {
 	defer cfgLock.Unlock()
 	cfg.GlobalOutboundProxy = url
 	return Save()
+}
+
+// GetGlobalTunnelProxy returns the default tunnel proxy URL.
+func GetGlobalTunnelProxy() string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil {
+		return ""
+	}
+	return cfg.GlobalTunnelProxy
+}
+
+// UpdateGlobalTunnelProxy sets the default tunnel proxy URL.
+func UpdateGlobalTunnelProxy(url string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cfg.GlobalTunnelProxy = strings.TrimSpace(url)
+	return Save()
+}
+
+// EffectiveTunnelProxy returns an account-specific tunnel proxy when set,
+// otherwise the global tunnel proxy.
+func EffectiveTunnelProxy(account *Account) string {
+	if account != nil && strings.TrimSpace(account.TunnelProxyURL) != "" {
+		return strings.TrimSpace(account.TunnelProxyURL)
+	}
+	return strings.TrimSpace(GetGlobalTunnelProxy())
 }
 
 // GetDNSOverrides returns a copy of the hostname-to-IP override table.

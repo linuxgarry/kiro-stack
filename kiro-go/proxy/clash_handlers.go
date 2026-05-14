@@ -8,6 +8,7 @@ import (
 	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -21,6 +22,35 @@ func (h *Handler) apiGetClash(w http.ResponseWriter, r *http.Request) {
 // apiGetOutbound returns the global outbound proxy (jump host) URL.
 func (h *Handler) apiGetOutbound(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"url": config.GetGlobalOutboundProxy()})
+}
+
+func (h *Handler) apiGetTunnel(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(map[string]string{"url": config.GetGlobalTunnelProxy()})
+}
+
+func (h *Handler) apiUpdateTunnel(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL != "" {
+		if err := validateProxyURL(req.URL); err != nil {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if err := config.UpdateGlobalTunnelProxy(req.URL); err != nil {
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 // apiUpdateOutbound persists the global outbound proxy URL. Empty string
@@ -38,7 +68,7 @@ func (h *Handler) apiUpdateOutbound(w http.ResponseWriter, r *http.Request) {
 	}
 	req.URL = strings.TrimSpace(req.URL)
 	if req.URL != "" {
-		if _, err := urlParseStrict(req.URL); err != nil {
+		if err := validateOutboundURL(req.URL); err != nil {
 			w.WriteHeader(400)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 			return
@@ -55,6 +85,38 @@ func (h *Handler) apiUpdateOutbound(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func validateProxyURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("proxy URL must include scheme and host")
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return nil
+	default:
+		return fmt.Errorf("invalid proxy scheme %q; expected http, https, socks5, or socks5h", u.Scheme)
+	}
+}
+
+func validateOutboundURL(raw string) error {
+	if _, err := urlParseStrict(raw); err != nil {
+		return err
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	switch u.Scheme {
+	case "http", "https", "socks5", "socks5h", "trojan", "ss", "vmess":
+		return nil
+	default:
+		return fmt.Errorf("invalid outbound scheme %q", u.Scheme)
+	}
 }
 
 // apiGetModelMapping returns the full mapping table to the UI.
@@ -254,7 +316,7 @@ func (h *Handler) apiRefreshClash(w http.ResponseWriter, r *http.Request) {
 type proxyTestResult struct {
 	OK        bool   `json:"ok"`
 	LatencyMs int64  `json:"latencyMs"`
-	Mode      string `json:"mode"`               // "direct" | "clash" | "proxyUrl"
+	Mode      string `json:"mode"`               // "direct" | "clash" | "proxyUrl" | "tunnel"
 	Fallback  string `json:"fallback,omitempty"` // runtime fallback transport used
 	Endpoint  string `json:"endpoint,omitempty"` // which geo service answered
 	IP        string `json:"ip,omitempty"`
@@ -266,7 +328,7 @@ type proxyTestResult struct {
 }
 
 // apiTestAccountProxy runs a single GET to a public IP-info service through
-// the account's configured proxy (Clash node → proxyUrl → direct). Unlike
+// the account's configured proxy (tunnel → Clash node → proxyUrl → direct). Unlike
 // real Kiro requests, this test is strict by default: it does not use the
 // runtime jump fallback, because the operator needs to see the selected
 // node's true egress IP.
@@ -286,23 +348,31 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 	}
 
 	mode := "direct"
-	if acc.ProxyNode != "" && clash.Default().Has(acc.ProxyNode) {
+	if strings.TrimSpace(acc.TunnelProxyURL) != "" {
+		mode = "tunnel"
+	} else if acc.ProxyNode != "" && clash.Default().Has(acc.ProxyNode) {
 		mode = "clash"
 	} else if acc.ProxyURL != "" {
 		mode = "proxyUrl"
+	} else if config.GetGlobalTunnelProxy() != "" {
+		mode = "globalTunnel"
 	}
 
 	var client *http.Client
 	if r.URL.Query().Get("fallback") == "1" {
 		client = clash.PickAccountClient(acc)
+	} else if strings.TrimSpace(acc.TunnelProxyURL) != "" {
+		client = config.GetAccountHTTPClient(acc.TunnelProxyURL)
 	} else if acc.ProxyNode != "" && clash.Default().Has(acc.ProxyNode) {
 		var err error
 		client, err = clash.ClientForNode(acc.ProxyNode, 30*time.Second)
 		if err != nil {
 			client = config.GetAccountHTTPClient(acc.ProxyURL)
 		}
-	} else {
+	} else if acc.ProxyURL != "" {
 		client = config.GetAccountHTTPClient(acc.ProxyURL)
+	} else {
+		client = config.GetAccountHTTPClient(config.GetGlobalTunnelProxy())
 	}
 
 	res := runProxyTest(client, r.URL.Query().Get("endpoint"))

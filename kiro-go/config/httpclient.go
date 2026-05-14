@@ -20,7 +20,7 @@ var clientCache sync.Map
 //
 // If proxyURL is empty, the transport honors environment proxy settings
 // (HTTPS_PROXY/HTTP_PROXY) — otherwise it forces traffic through the given
-// proxy. Supported schemes: http, https, socks5.
+// proxy. Supported schemes: http, https, socks5, socks5h.
 func GetHTTPClient(proxyURL string, timeout time.Duration, maxIdle, maxHost int) *http.Client {
 	key := clientKey{proxy: proxyURL, timeout: timeout, maxIdle: maxIdle, maxHost: maxHost}
 	if v, ok := clientCache.Load(key); ok {
