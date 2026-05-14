@@ -14,6 +14,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -126,6 +127,10 @@ type Config struct {
 	// the provider blocks direct access to certain CDNs.
 	GlobalOutboundProxy string `json:"globalOutboundProxy,omitempty"`
 
+	// DNSOverrides maps poisoned proxy hostnames to known-good IP addresses.
+	// Exact hostnames and wildcard suffixes like "*.example.com" are supported.
+	DNSOverrides map[string]string `json:"dnsOverrides,omitempty"`
+
 	// CircuitBreaker controls account-level failure isolation. It sits on
 	// top of the older short cooldown behavior and is managed from the admin UI.
 	CircuitBreaker CircuitBreakerConfig `json:"circuitBreaker,omitempty"`
@@ -215,7 +220,7 @@ type AccountInfo struct {
 }
 
 // Version 当前版本号
-const Version = "2.6.0"
+const Version = "2.6.1"
 
 var (
 	cfg     *Config
@@ -589,6 +594,48 @@ func UpdateGlobalOutboundProxy(url string) error {
 	cfgLock.Lock()
 	defer cfgLock.Unlock()
 	cfg.GlobalOutboundProxy = url
+	return Save()
+}
+
+// GetDNSOverrides returns a copy of the hostname-to-IP override table.
+func GetDNSOverrides() map[string]string {
+	cfgLock.RLock()
+	defer cfgLock.RUnlock()
+	if cfg == nil || cfg.DNSOverrides == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(cfg.DNSOverrides))
+	for host, ip := range cfg.DNSOverrides {
+		out[host] = ip
+	}
+	return out
+}
+
+// UpdateDNSOverrides replaces the full override table. Keys are exact
+// hostnames or wildcard suffixes like "*.example.com"; values must be IPs.
+func UpdateDNSOverrides(in map[string]string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	cleaned := make(map[string]string, len(in))
+	for host, ip := range in {
+		host = strings.ToLower(strings.TrimSpace(host))
+		ip = strings.TrimSpace(ip)
+		if host == "" || ip == "" {
+			continue
+		}
+		if strings.HasPrefix(host, "*.") {
+			host = "*." + strings.TrimPrefix(host, "*.")
+		}
+		if _, err := netip.ParseAddr(ip); err != nil {
+			return fmt.Errorf("invalid DNS override IP for %s: %w", host, err)
+		}
+		cleaned[host] = ip
+	}
+	if len(cleaned) == 0 {
+		cfg.DNSOverrides = nil
+	} else {
+		cfg.DNSOverrides = cleaned
+	}
 	return Save()
 }
 

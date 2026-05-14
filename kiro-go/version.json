@@ -1,5 +1,5 @@
 {
-  "version": "2.6.0",
-  "changelog": "🛡️ DNSGuard 抗污染解析，覆盖 Clash 节点和全局跳板\n🔁 Clash 节点 EOF/timeout/connection refused 时自动回退账号代理或全局跳板\n⚡ 新增熔断管理标签页，支持账号级熔断配置和手动解除\n📝 README 增加 v2.6 更新说明和 VPS 实测结果",
+  "version": "2.6.1",
+  "changelog": "🔎 账号测试结果明确标注 clash+fallback，避免把跳板出口误判成节点出口\n📌 新增 DNS 覆盖表，可持久化真实节点 IP 对抗 127.0.0.1 污染\n🌐 DNSGuard 增加 AliDNS / DNSPod DoH 兜底解析\n🧰 后台设置页新增 DNS 覆盖编辑入口",
   "download": "https://github.com/Quorinex/Kiro-Go"
 }

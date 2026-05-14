@@ -2156,6 +2156,10 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		h.apiUpdateOutbound(w, r)
 	case path == "/outbound/test" && r.Method == "POST":
 		h.apiTestOutbound(w, r)
+	case path == "/dns-overrides" && r.Method == "GET":
+		h.apiGetDNSOverrides(w, r)
+	case path == "/dns-overrides" && r.Method == "POST":
+		h.apiUpdateDNSOverrides(w, r)
 	case path == "/test-endpoints" && r.Method == "GET":
 		h.apiGetTestEndpoints(w, r)
 	case path == "/modelmapping" && r.Method == "GET":

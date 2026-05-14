@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"kiro-api-proxy/config"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,6 +31,10 @@ var dohClient = &http.Client{
 				addr = net.JoinHostPort("1.1.1.1", port)
 			case "dns.google":
 				addr = net.JoinHostPort("8.8.8.8", port)
+			case "dns.alidns.com":
+				addr = net.JoinHostPort("223.5.5.5", port)
+			case "doh.pub":
+				addr = net.JoinHostPort("1.12.12.12", port)
 			}
 			d := &net.Dialer{Timeout: 6 * time.Second}
 			return d.DialContext(ctx, network, addr)
@@ -72,6 +77,13 @@ func hardenProxyDNS(nodeCfg map[string]any) {
 		if isBadProxyIP(ip) {
 			fmt.Printf("[DNSGuard] proxy %q has unusable IP server %s\n", nodeName(nodeCfg), host)
 		}
+		return
+	}
+
+	if overrideIP, ok := dnsOverrideFor(host); ok {
+		nodeCfg["server"] = overrideIP
+		preserveOriginalServerName(nodeCfg, host)
+		fmt.Printf("[DNSGuard] proxy %q server %s -> %s via override\n", nodeName(nodeCfg), host, overrideIP)
 		return
 	}
 
@@ -136,6 +148,8 @@ func resolveCleanHost(host string) (cleanDNSResult, error) {
 	}{
 		{name: "cloudflare", base: "https://cloudflare-dns.com/dns-query"},
 		{name: "google", base: "https://dns.google/resolve"},
+		{name: "alidns", base: "https://dns.alidns.com/resolve"},
+		{name: "dnspod", base: "https://doh.pub/dns-query"},
 	}
 	var lastErr error
 	for _, p := range providers {
@@ -155,6 +169,28 @@ func resolveCleanHost(host string) (cleanDNSResult, error) {
 		lastErr = fmt.Errorf("no usable A record")
 	}
 	return cleanDNSResult{}, lastErr
+}
+
+func dnsOverrideFor(host string) (string, bool) {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return "", false
+	}
+	overrides := config.GetDNSOverrides()
+	if ip, ok := overrides[host]; ok {
+		return ip, true
+	}
+	for pattern, ip := range overrides {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if !strings.HasPrefix(pattern, "*.") {
+			continue
+		}
+		suffix := strings.TrimPrefix(pattern, "*")
+		if strings.HasSuffix(host, suffix) {
+			return ip, true
+		}
+	}
+	return "", false
 }
 
 func queryDoH(baseURL, host, recordType string) ([]netip.Addr, error) {

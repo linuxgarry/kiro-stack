@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.1** | DNS 覆盖表 · 代理测试显式标记 fallback · AliDNS/DNSPod DoH |
 | 🆕 **v2.6** | 🛡️ DNSGuard 抗污染 · Clash 节点失败自动回退到全局跳板 · 熔断管理标签页 |
 | 🆕 **v2.5** | 测试接口下拉框（含 geosurf / Kiro 直测）· 「联通」改为「连接成功」|
 | **v2.4** | 🔗 **链式 dial 真的实现了** · jump → node → target 三跳跑通 |
@@ -16,6 +17,46 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🛠️ v2.6.1 — DNS 覆盖 + fallback 透明化 / DNS overrides + visible fallback
+
+这一版修复一个容易误判的问题：当 Clash 节点因为 DNS 污染或连接失败不可用时，运行时会按设计回退到全局跳板；如果测试接口返回的是跳板 IP，旧 UI 会把它显示成普通成功，容易误以为“节点出口成功”。现在后台会明确显示 `clash+fallback` 和 `fallback: global jump`。
+
+This release makes runtime fallback visible. If a Clash node fails and the request succeeds through the global jump, the admin UI now shows `clash+fallback` plus `fallback: global jump`, so the returned IP is not mistaken for the node's egress IP.
+
+### 加了什么 / New
+
+- **DNS 覆盖表**：设置页新增「DNS 覆盖（抗污染）」输入框。每行写 `域名 IP`，支持 `*.example.com` 通配。保存后会立即重载缓存订阅。
+- **fallback 标识**：账号代理测试如果实际走了账号代理或全局跳板兜底，返回 JSON 会带 `fallback` 字段，UI 显示 `clash+fallback`。
+- **更多 DoH Provider**：DNSGuard 现在除了 Cloudflare / Google，还会尝试 AliDNS 和 DNSPod，并为它们做 bootstrap 直连。
+
+- **DNS overrides**: Settings now has a persistent override table. Use `host IP` per line; wildcard suffixes like `*.example.com` are supported. Saving reloads cached subscription nodes.
+- **Visible fallback**: Proxy tests now expose the runtime fallback transport through the JSON `fallback` field and UI text.
+- **More DoH providers**: DNSGuard now tries AliDNS and DNSPod in addition to Cloudflare and Google, with bootstrap IP dialing.
+
+### 重要说明 / Important
+
+如果无跳板时节点域名被污染成 `127.0.0.1`，且公共 DoH 也查不到真实 A 记录，程序不能凭空推导真实节点 IP。解决方式是把真实 IP 固化到「DNS 覆盖（抗污染）」里，例如：
+
+```text
+bepshbgp01.114837322.xyz 真实IP
+bepgzbgp01.114837322.xyz 真实IP
+```
+
+只有当这些域名确实共用一个入口 IP 时，才建议使用通配：
+
+```text
+*.114837322.xyz 真实IP
+```
+
+### 新增 API / New APIs
+
+| API | 用途 |
+|-----|------|
+| `GET /admin/api/dns-overrides` | 获取 DNS 覆盖表 |
+| `POST /admin/api/dns-overrides` | 替换 DNS 覆盖表，并立即重载缓存订阅 |
 
 ---
 

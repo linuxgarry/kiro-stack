@@ -1265,6 +1265,15 @@
             </div>
             <div class="card">
                 <div class="card-header">
+                    <span class="card-title" data-i18n="settings.dnsOverrideTitle"></span>
+                    <button class="btn btn-sm btn-primary" onclick="saveDNSOverrides()" data-i18n="common.save"></button>
+                </div>
+                <div style="font-size:12px;color:#64748b;margin-bottom:8px" data-i18n="settings.dnsOverrideHint"></div>
+                <textarea id="dnsOverridesInput" placeholder="bepshbgp01.114837322.xyz 1.2.3.4&#10;*.example.com 5.6.7.8" style="min-height:110px"></textarea>
+                <div id="dnsOverridesResult" style="font-size:12px;color:#64748b;margin-top:6px"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
                     <span class="card-title" data-i18n="settings.mappingTitle"></span>
                     <div class="card-actions">
                         <button class="btn btn-sm btn-secondary" onclick="addMappingRow()" data-i18n="settings.mappingAdd"></button>
@@ -1502,6 +1511,8 @@
                 'settings.outboundTest': '测试',
                 'settings.testEndpoint': '测试接口:',
                 'settings.testEndpointAuto': '自动 (依次回退)',
+                'settings.dnsOverrideTitle': 'DNS 覆盖（抗污染）',
+                'settings.dnsOverrideHint': '当节点域名被污染且公共 DoH 也查不到真实 A 记录时，在这里固化真实 IP。每行：域名 IP；支持 *.example.com 通配。保存后会立即重载缓存订阅。',
                 'settings.mappingTitle': '模型映射',
                 'settings.mappingHint': '左：调用方传入的 model 名；右：实际转发给 Kiro 的 model 名。未列出的模型按原名透传。',
                 'settings.mappingAdd': '+ 添加',
@@ -1749,6 +1760,8 @@
                 'settings.outboundTest': 'Test',
                 'settings.testEndpoint': 'Test endpoint:',
                 'settings.testEndpointAuto': 'Auto (fallback)',
+                'settings.dnsOverrideTitle': 'DNS Overrides',
+                'settings.dnsOverrideHint': 'Pin real IPs when a node domain is poisoned and public DoH has no usable A record. One per line: host IP; wildcard suffixes like *.example.com are supported. Saving reloads cached nodes immediately.',
                 'settings.mappingTitle': 'Model Mapping',
                 'settings.mappingHint': 'Left: inbound model name from callers. Right: what we actually send to Kiro. Unlisted models pass through unchanged.',
                 'settings.mappingAdd': '+ Add',
@@ -2408,6 +2421,7 @@
             loadThinkingConfig();
             loadEndpointConfig();
             loadOutbound();
+            loadDNSOverrides();
             loadMapping();
         }
         async function loadOutbound() {
@@ -2469,6 +2483,53 @@
             } catch (e) {
                 result.style.color = '#ef4444';
                 result.textContent = (t('accounts.proxyTestFail') || 'Failed') + ': ' + e.message;
+            }
+        }
+        async function loadDNSOverrides() {
+            try {
+                const r = await fetch('/admin/api/dns-overrides', { headers: { 'X-Admin-Password': password } });
+                const d = await r.json() || {};
+                const el = document.getElementById('dnsOverridesInput');
+                if (el && document.activeElement !== el) {
+                    el.value = Object.keys(d).sort().map(k => k + ' ' + d[k]).join('\n');
+                }
+            } catch (e) {}
+        }
+        function parseDNSOverridesText(text) {
+            const out = {};
+            for (const rawLine of (text || '').split(/\n/)) {
+                const line = rawLine.replace(/#.*/, '').trim();
+                if (!line) continue;
+                const parts = line.split(/\s+/);
+                if (parts.length < 2) throw new Error('invalid line: ' + rawLine);
+                out[parts[0]] = parts[1];
+            }
+            return out;
+        }
+        async function saveDNSOverrides() {
+            const input = document.getElementById('dnsOverridesInput');
+            const result = document.getElementById('dnsOverridesResult');
+            try {
+                const body = parseDNSOverridesText(input ? input.value : '');
+                const r = await fetch('/admin/api/dns-overrides', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Admin-Password': password },
+                    body: JSON.stringify(body)
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok || !d.success) throw new Error(d.error || 'save failed');
+                if (result) {
+                    result.style.color = '#059669';
+                    result.textContent = t('common.saved') + ' · ' + (d.entries || 0);
+                }
+                await loadClash();
+            } catch (e) {
+                if (result) {
+                    result.style.color = '#ef4444';
+                    result.textContent = t('common.saveFailed') + ': ' + e.message;
+                } else {
+                    alert(t('common.saveFailed') + ': ' + e.message);
+                }
             }
         }
         let mappingData = {};
@@ -2798,6 +2859,7 @@
                 if (d.asn) parts.push(d.asn);
                 parts.push((d.latencyMs || 0) + 'ms');
                 parts.push('[' + (d.mode || '?') + ']');
+                if (d.fallback) parts.push('fallback: ' + d.fallback);
                 if (d.endpoint) parts.push('@ ' + d.endpoint);
                 el.style.color = '#059669';
                 el.textContent = t('accounts.proxyTestOK') + ' ' + parts.join(' · ');

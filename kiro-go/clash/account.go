@@ -113,7 +113,15 @@ func (rt *fallbackRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 		retryReq.Body = body
 	}
 	fmt.Printf("[ProxyFallback] %s failed (%v); retrying via %s\n", rt.primaryName, err, rt.fallbackName)
-	return rt.fallback.RoundTrip(retryReq)
+	fallbackResp, fallbackErr := rt.fallback.RoundTrip(retryReq)
+	if fallbackErr == nil && fallbackResp != nil {
+		if fallbackResp.Header == nil {
+			fallbackResp.Header = make(http.Header)
+		}
+		fallbackResp.Header.Set("X-Kiro-Proxy-Fallback", rt.fallbackName)
+		fallbackResp.Header.Set("X-Kiro-Proxy-Primary-Error", err.Error())
+	}
+	return fallbackResp, fallbackErr
 }
 
 func shouldRetryWithFallback(err error) bool {

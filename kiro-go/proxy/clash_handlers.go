@@ -79,6 +79,30 @@ func (h *Handler) apiUpdateModelMapping(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "entries": len(config.GetModelMapping())})
 }
 
+func (h *Handler) apiGetDNSOverrides(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(config.GetDNSOverrides())
+}
+
+func (h *Handler) apiUpdateDNSOverrides(w http.ResponseWriter, r *http.Request) {
+	var in map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON; expected {host: ip}"})
+		return
+	}
+	if err := config.UpdateDNSOverrides(in); err != nil {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	// Re-parse cached subscription so overrides affect live node dialers
+	// immediately, without waiting for a container restart.
+	if config.GetClashSubscriptionURL() != "" {
+		_ = clash.Default().SetJump(config.GetGlobalOutboundProxy())
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "entries": len(config.GetDNSOverrides())})
+}
+
 // apiGetTestEndpoints returns the list of probe endpoints the UI can show
 // in its dropdown. Each entry has a stable name + URL + a flag describing
 // what kind of result it produces.
@@ -204,16 +228,17 @@ func (h *Handler) apiRefreshClash(w http.ResponseWriter, r *http.Request) {
 
 // proxyTestResult is returned to the UI by apiTestAccountProxy.
 type proxyTestResult struct {
-	OK         bool   `json:"ok"`
-	LatencyMs  int64  `json:"latencyMs"`
-	Mode       string `json:"mode"`                 // "direct" | "clash" | "proxyUrl"
-	Endpoint   string `json:"endpoint,omitempty"`   // which geo service answered
-	IP         string `json:"ip,omitempty"`
-	Country    string `json:"country,omitempty"`
-	Region     string `json:"region,omitempty"`
-	City       string `json:"city,omitempty"`
-	ASN        string `json:"asn,omitempty"`
-	Error      string `json:"error,omitempty"`
+	OK        bool   `json:"ok"`
+	LatencyMs int64  `json:"latencyMs"`
+	Mode      string `json:"mode"`               // "direct" | "clash" | "proxyUrl"
+	Fallback  string `json:"fallback,omitempty"` // runtime fallback transport used
+	Endpoint  string `json:"endpoint,omitempty"` // which geo service answered
+	IP        string `json:"ip,omitempty"`
+	Country   string `json:"country,omitempty"`
+	Region    string `json:"region,omitempty"`
+	City      string `json:"city,omitempty"`
+	ASN       string `json:"asn,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // apiTestAccountProxy runs a single GET to a public IP-info service through
@@ -246,6 +271,9 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 
 	res := runProxyTest(client, r.URL.Query().Get("endpoint"))
 	res.Mode = mode
+	if res.Fallback != "" {
+		res.Mode = mode + "+fallback"
+	}
 	_ = json.NewEncoder(w).Encode(res)
 }
 
@@ -288,6 +316,7 @@ func runProxyTest(client *http.Client, pickName string) proxyTestResult {
 			lastErr = ep.URL + ": " + err.Error()
 			continue
 		}
+		fallback := resp.Header.Get("X-Kiro-Proxy-Fallback")
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		resp.Body.Close()
 		cancel()
@@ -304,6 +333,7 @@ func runProxyTest(client *http.Client, pickName string) proxyTestResult {
 			r.OK = true
 			r.Endpoint = ep.URL
 			r.LatencyMs = time.Since(start).Milliseconds()
+			r.Fallback = fallback
 			return r
 		case resp.StatusCode/100 != 2:
 			lastErr = fmt.Sprintf("%s: HTTP %d", ep.URL, resp.StatusCode)
@@ -331,6 +361,7 @@ func runProxyTest(client *http.Client, pickName string) proxyTestResult {
 		r.OK = true
 		r.Endpoint = ep.URL
 		r.LatencyMs = time.Since(start).Milliseconds()
+		r.Fallback = fallback
 		return r
 	}
 	return proxyTestResult{
