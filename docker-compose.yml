@@ -1,23 +1,8 @@
 services:
-  kiro-gateway:
-    build: ./kiro-gateway
-    image: kiro-gateway-local:latest
-    container_name: kiro-gateway
-    restart: unless-stopped
-    environment:
-      - PROXY_API_KEY=${INTERNAL_API_KEY}
-      - VPN_PROXY_URL=${VPN_PROXY_URL:-}
-      - DEBUG_MODE=${DEBUG_MODE:-off}
-      - SKIP_STARTUP_CREDENTIAL_CHECK=true
-    ports:
-      - "8001:8000"
-
   kiro-go:
     build: ./kiro-go
     container_name: kiro-go
     restart: unless-stopped
-    depends_on:
-      - kiro-gateway
     ports:
       - "8088:8080"
     volumes:
@@ -25,5 +10,3 @@ services:
     environment:
       - CONFIG_PATH=/app/data/config.json
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - KIRO_GATEWAY_BASE=http://kiro-gateway:8000
-      - KIRO_GATEWAY_API_KEY=${INTERNAL_API_KEY}

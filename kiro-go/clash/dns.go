@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,6 +42,8 @@ var dohClient = &http.Client{
 		},
 	},
 }
+
+var dnsGuardCache sync.Map
 
 type dohAnswer struct {
 	Name string `json:"name"`
@@ -92,7 +95,7 @@ func hardenProxyDNS(nodeCfg map[string]any) {
 		return
 	}
 
-	clean, err := resolveCleanHost(host, strategy)
+	clean, err := resolveCleanHostCached(host, strategy)
 	if err != nil {
 		if pollutedBySystemDNS(host) {
 			fmt.Printf("[DNSGuard] proxy %q server %s appears polluted but DoH failed: %v\n", nodeName(nodeCfg), host, err)
@@ -103,6 +106,22 @@ func hardenProxyDNS(nodeCfg map[string]any) {
 	nodeCfg["server"] = clean.IP
 	preserveOriginalServerName(nodeCfg, host)
 	fmt.Printf("[DNSGuard] proxy %q server %s -> %s via %s\n", nodeName(nodeCfg), host, clean.IP, clean.Provider)
+}
+
+type dnsGuardCacheEntry struct {
+	result cleanDNSResult
+	err    error
+}
+
+func resolveCleanHostCached(host, strategy string) (cleanDNSResult, error) {
+	key := strategy + "\x00" + strings.ToLower(host)
+	if cached, ok := dnsGuardCache.Load(key); ok {
+		entry := cached.(dnsGuardCacheEntry)
+		return entry.result, entry.err
+	}
+	result, err := resolveCleanHost(host, strategy)
+	dnsGuardCache.Store(key, dnsGuardCacheEntry{result: result, err: err})
+	return result, err
 }
 
 func nodeName(nodeCfg map[string]any) string {

@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.6** | 默认合并为单容器 `kiro-go`，启动不阻塞，避免真实 API 请求绕过账号代理 |
 | 🆕 **v2.6.5** | 隧道断线自动刷新，支持 `{session}` 轮换和冷却保护 |
 | 🆕 **v2.6.4** | 全局/账号隧道代理，支持 Luminati/Bright Data、Rola 等 HTTP/SOCKS 隧道 |
 | 🆕 **v2.6.3** | 后台新增 DNS 策略切换：auto/global/china/system/off |
@@ -21,6 +22,30 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## ⚠️ v2.6.6 — 默认单容器 kiro-go / Single-container kiro-go by default
+
+`kiro-go` 后台里的 Clash 节点、账号代理、全局隧道代理都只在 `kiro-go` 进程内生效。如果给 `kiro-go` 设置了 `KIRO_GATEWAY_BASE`，真实 `/v1/messages` 和 `/v1/chat/completions` 请求会被转发给 `kiro-gateway`，最终由 `kiro-gateway` 直连 AWS/Kiro；这会绕过面板里给账号绑定的代理节点。
+
+因此根目录 `docker-compose.yml` 现在默认只启动一个 `kiro-go` 容器。这个容器同时提供管理面板、Claude 兼容接口和 OpenAI 兼容接口：
+
+```text
+http://<kiro-go-ip>:8080/admin
+http://<kiro-go-ip>:8080/v1/messages
+http://<kiro-go-ip>:8080/v1/chat/completions
+```
+
+`kiro-gateway` 目录仍保留在仓库里，可单独运行用于调试或特殊兼容场景，但默认部署不再创建第二个容器，也不再占用第二个局域网 IP。启用转发前要确认你不需要 `kiro-go` 的账号级代理隔离。
+
+同时，Clash 订阅缓存加载改为后台执行，避免 DNSGuard 逐个解析节点时阻塞 Web 面板启动；DNSGuard 也会缓存同一 host 的解析结果，避免订阅里几十个节点重复解析同一个入口域名。账号如果绑定了 Clash 节点，但节点列表还没加载完成或该节点不存在，程序不会静默直连；它只会使用账号代理 / 全局隧道 / 全局跳板等显式 fallback，否则直接返回错误。
+
+`kiro-go` account Clash nodes, per-account proxies, and global tunnel proxies only apply inside the `kiro-go` process. If `KIRO_GATEWAY_BASE` is set, real API calls are forwarded to `kiro-gateway`, which makes its own upstream AWS/Kiro requests and bypasses the proxy bindings configured in the `kiro-go` admin UI.
+
+The root `docker-compose.yml` therefore starts only one `kiro-go` container by default. Use the `kiro-go` address as the public admin/API endpoint. The `kiro-gateway` directory remains available for standalone debugging or compatibility scenarios, but the default deployment no longer creates a second container or needs a second LAN IP.
+
+Clash subscription cache loading also runs in the background now, so DNSGuard node parsing cannot block the admin/API server from starting. DNSGuard caches per-host resolution results as well, avoiding repeated DoH lookups for many nodes sharing the same ingress host. If an account has a Clash node selected but that node is not loaded yet, requests will not silently go direct; they use an explicit account/global fallback proxy if configured, otherwise fail closed.
 
 ---
 

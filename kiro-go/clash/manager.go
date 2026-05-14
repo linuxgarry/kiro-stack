@@ -58,10 +58,9 @@ var (
 // Default returns the process-wide manager singleton.
 func Default() *Manager { return mgr }
 
-// Init loads the subscription. It prefers the on-disk cache (so a browser
-// refresh doesn't lose the node list across restarts) and then kicks off a
-// background re-fetch of the live URL. Returns the number of nodes loaded
-// from cache synchronously.
+// Init starts subscription loading in the background. Parsing can involve DNS
+// cleanup for every node, so doing it synchronously can keep the admin/API
+// server from listening for minutes on slow resolvers.
 func Init() (loaded int, err error) {
 	// Always install the jump proxy first so the subscription fetch can
 	// chain through it. Empty URL is a no-op.
@@ -74,25 +73,25 @@ func Init() (loaded int, err error) {
 		return 0, nil
 	}
 
-	// Try cache first — fast and doesn't need the network.
-	if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
-		if proxies, names, perr := parseSubscription(cached, mgr.JumpURL()); perr == nil {
-			mgr.commit(proxies, names, "")
-			loaded = len(proxies)
-		}
-	}
-
-	// Always try a live fetch in the background so the cache gets refreshed.
-	// Startup doesn't block on this — if the VPS can't reach the subscription
-	// URL right now, we still have the cache.
 	go func() {
+		// Try cache first so the node list survives restarts even when the live
+		// subscription URL is temporarily unreachable.
+		if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
+			if proxies, names, perr := parseSubscription(cached, mgr.JumpURL()); perr == nil {
+				mgr.commit(proxies, names, "")
+			} else {
+				mgr.setError(perr.Error())
+			}
+		}
+
+		// Always try a live fetch afterward so the cache gets refreshed.
 		if _, err := mgr.Load(subURL); err != nil {
 			// Failure is already stored in lastErr via setError.
 			_ = err
 		}
 	}()
 
-	return loaded, nil
+	return 0, nil
 }
 
 // Generation returns the current proxies-map generation (changes on each reload).

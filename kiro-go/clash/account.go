@@ -20,9 +20,10 @@ import (
 //  4. global tunnel proxy
 //  5. direct connection (honoring HTTPS_PROXY env if set)
 //
-// If ProxyNode is set but the node isn't currently loaded (e.g. after a
-// subscription reload that dropped it), we fall back to ProxyURL → direct
-// so that the account keeps working.
+// If ProxyNode is set but the node isn't currently loaded (e.g. while the
+// subscription is still loading), we never silently fall back to direct. We
+// use an explicit fallback proxy/jump when one exists; otherwise the request
+// fails so a proxy-bound account cannot leak direct traffic.
 //
 // If ProxyNode is loaded but fails at request time with a transport-level
 // network error (EOF, timeout, connection reset, etc.), we retry once through
@@ -36,6 +37,7 @@ func PickAccountClient(account *config.Account) *http.Client {
 		if c, err := ClientForNode(account.ProxyNode, 30*time.Second); err == nil {
 			return withRuntimeFallback(c, account, 30*time.Second, "clash:"+account.ProxyNode)
 		}
+		return clientForMissingNode(account, 30*time.Second, account.ProxyNode)
 	}
 	var proxyURL string
 	if account != nil {
@@ -61,6 +63,7 @@ func PickAccountStreamClient(account *config.Account) *http.Client {
 		if c, err := ClientForNode(account.ProxyNode, 5*time.Minute); err == nil {
 			return withRuntimeFallback(c, account, 5*time.Minute, "clash:"+account.ProxyNode)
 		}
+		return clientForMissingNode(account, 5*time.Minute, account.ProxyNode)
 	}
 	var proxyURL string
 	if account != nil {
@@ -74,6 +77,28 @@ func PickAccountStreamClient(account *config.Account) *http.Client {
 		return withTunnelRefresh(config.GetKiroStreamHTTPClient(ref.URL), ref)
 	}
 	return config.GetKiroStreamHTTPClient(proxyURL)
+}
+
+func clientForMissingNode(account *config.Account, timeout time.Duration, node string) *http.Client {
+	fallbackName, fallbackTransport := fallbackTransportFor(account, timeout)
+	if fallbackTransport != nil {
+		fmt.Printf("[ProxyFallback] clash node %q not loaded; using %s\n", node, fallbackName)
+		return &http.Client{Timeout: timeout, Transport: fallbackTransport}
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: errorRoundTripper{
+			err: fmt.Errorf("clash node %q is not loaded and no fallback proxy is configured", node),
+		},
+	}
+}
+
+type errorRoundTripper struct {
+	err error
+}
+
+func (rt errorRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, rt.err
 }
 
 func withRuntimeFallback(primary *http.Client, account *config.Account, timeout time.Duration, primaryName string) *http.Client {
