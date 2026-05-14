@@ -1,5 +1,5 @@
 {
-  "version": "2.6.1",
-  "changelog": "🔎 账号测试结果明确标注 clash+fallback，避免把跳板出口误判成节点出口\n📌 新增 DNS 覆盖表，可持久化真实节点 IP 对抗 127.0.0.1 污染\n🌐 DNSGuard 增加 AliDNS / DNSPod DoH 兜底解析\n🧰 后台设置页新增 DNS 覆盖编辑入口",
+  "version": "2.6.2",
+  "changelog": "🧪 账号卡代理测试默认改为严格节点测试，不再自动走业务 fallback\n🔎 只有显式 fallback=1 时才测试兜底链路，避免把跳板出口误判成节点出口\n📌 保留 DNS 覆盖表和 fallback 透明标识",
   "download": "https://github.com/Quorinex/Kiro-Go"
 }

@@ -242,9 +242,10 @@ type proxyTestResult struct {
 }
 
 // apiTestAccountProxy runs a single GET to a public IP-info service through
-// the account's configured proxy (Clash node → proxyUrl → direct). It
-// returns latency plus the observed egress IP + geo so the operator can
-// visually confirm the exit location.
+// the account's configured proxy (Clash node → proxyUrl → direct). Unlike
+// real Kiro requests, this test is strict by default: it does not use the
+// runtime jump fallback, because the operator needs to see the selected
+// node's true egress IP.
 func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id string) {
 	accounts := config.GetAccounts()
 	var acc *config.Account
@@ -267,7 +268,18 @@ func (h *Handler) apiTestAccountProxy(w http.ResponseWriter, r *http.Request, id
 		mode = "proxyUrl"
 	}
 
-	client := clash.PickAccountClient(acc)
+	var client *http.Client
+	if r.URL.Query().Get("fallback") == "1" {
+		client = clash.PickAccountClient(acc)
+	} else if acc.ProxyNode != "" && clash.Default().Has(acc.ProxyNode) {
+		var err error
+		client, err = clash.ClientForNode(acc.ProxyNode, 30*time.Second)
+		if err != nil {
+			client = config.GetAccountHTTPClient(acc.ProxyURL)
+		}
+	} else {
+		client = config.GetAccountHTTPClient(acc.ProxyURL)
+	}
 
 	res := runProxyTest(client, r.URL.Query().Get("endpoint"))
 	res.Mode = mode

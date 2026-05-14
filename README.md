@@ -8,6 +8,7 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 
 | 版本 | 重点 / Highlight |
 |------|------|
+| 🆕 **v2.6.2** | 账号卡测试默认严格测节点真实出口，不再被业务 fallback 掩盖 |
 | 🆕 **v2.6.1** | DNS 覆盖表 · 代理测试显式标记 fallback · AliDNS/DNSPod DoH |
 | 🆕 **v2.6** | 🛡️ DNSGuard 抗污染 · Clash 节点失败自动回退到全局跳板 · 熔断管理标签页 |
 | 🆕 **v2.5** | 测试接口下拉框（含 geosurf / Kiro 直测）· 「联通」改为「连接成功」|
@@ -17,6 +18,14 @@ Forked from **[Yoahoug/kiro-stack](https://github.com/Yoahoug/kiro-stack)**. Add
 | **v2.1** | 跳板 +trojan · 跳板热加载 · 卡片清零废行 |
 | **v2** | 🌐 内嵌 mihomo (Clash.Meta) 内核 · 订阅缓存 · 每账号节点绑定 + 联通性测试 · 3 列响应式网格 |
 | **v1** | 单账号 HTTP/SOCKS5 代理 |
+
+---
+
+## 🧪 v2.6.2 — 测试严格模式 / Strict proxy test mode
+
+修正账号卡「测试」按钮的语义：它现在默认只测试当前账号绑定的节点真实出口，不再自动使用业务请求里的运行时 fallback。这样如果节点因为 DNS 污染解析到 `127.0.0.1`，测试会直接失败并显示真实错误，而不是被全局跳板兜底成同一个出口 IP。
+
+Real Kiro requests still keep runtime fallback for availability, but admin proxy tests are now strict by default. Add `fallback=1` to the test API only when you explicitly want to verify the fallback chain.
 
 ---
 
