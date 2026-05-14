@@ -73,24 +73,22 @@ func Init() (loaded int, err error) {
 		return 0, nil
 	}
 
-	go func() {
-		// Try cache first so the node list survives restarts even when the live
-		// subscription URL is temporarily unreachable.
-		if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
-			if proxies, names, perr := parseSubscription(cached, mgr.JumpURL()); perr == nil {
-				mgr.commit(proxies, names, "")
-			} else {
-				mgr.setError(perr.Error())
-			}
+	// Load the local cache synchronously before the API server starts. This
+	// prevents proxy-bound accounts from seeing an empty node set during the
+	// first seconds after a restart.
+	if cached, cerr := os.ReadFile(subscriptionCachePath()); cerr == nil && len(cached) > 0 {
+		proxies, names, perr := parseSubscription(cached, mgr.JumpURL())
+		if perr != nil {
+			mgr.setError(perr.Error())
+			return 0, perr
 		}
+		mgr.commit(proxies, names, "")
+		return len(names), nil
+	}
 
-		// Always try a live fetch afterward so the cache gets refreshed.
-		if _, err := mgr.Load(subURL); err != nil {
-			// Failure is already stored in lastErr via setError.
-			_ = err
-		}
-	}()
-
+	// Do not fetch the subscription automatically on startup. Subscription URLs
+	// can be short-lived or rate-limited; the admin refresh action is the only
+	// place that performs a live fetch.
 	return 0, nil
 }
 
