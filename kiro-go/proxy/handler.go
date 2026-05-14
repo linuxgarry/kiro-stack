@@ -1138,7 +1138,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 			outputTokens = outTok
 		},
 		OnError: func(err error) {
-			h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota"))
+			h.recordAccountError(account.ID, err)
 		},
 		OnCredits: func(c float64) {
 			credits = c
@@ -1147,7 +1147,7 @@ func (h *Handler) handleClaudeStream(w http.ResponseWriter, account *config.Acco
 
 	err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "quota"))
+		h.recordAccountError(account.ID, err)
 		h.sendSSE(w, flusher, "error", map[string]interface{}{
 			"type":  "error",
 			"error": map[string]string{"type": "api_error", "message": err.Error()},
@@ -1403,6 +1403,17 @@ func truncateError(err string) string {
 	return err
 }
 
+func (h *Handler) recordAccountError(accountID string, err error) {
+	if err == nil {
+		return
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "invalid_model_id") || strings.Contains(msg, "invalid model") {
+		return
+	}
+	h.pool.RecordError(accountID, strings.Contains(msg, "429") || strings.Contains(msg, "quota"))
+}
+
 // handleClaudeNonStream Claude 非流式响应
 func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.Account, payload *KiroPayload, model string, requestStart time.Time) {
 	var content string
@@ -1427,7 +1438,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 			outputTokens = outTok
 		},
 		OnError: func(err error) {
-			h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+			h.recordAccountError(account.ID, err)
 		},
 		OnCredits: func(c float64) {
 			credits = c
@@ -1436,7 +1447,7 @@ func (h *Handler) handleClaudeNonStream(w http.ResponseWriter, account *config.A
 
 	err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+		h.recordAccountError(account.ID, err)
 		h.sendClaudeError(w, 500, "api_error", err.Error())
 		h.finalizeRequest(RequestFinalMetrics{
 			Path:         "/v1/messages",
@@ -1856,7 +1867,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 			outputTokens = outTok
 		},
 		OnError: func(err error) {
-			h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+			h.recordAccountError(account.ID, err)
 		},
 		OnCredits: func(c float64) {
 			credits = c
@@ -1865,7 +1876,7 @@ func (h *Handler) handleOpenAIStream(w http.ResponseWriter, account *config.Acco
 
 	err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+		h.recordAccountError(account.ID, err)
 		h.finalizeRequest(RequestFinalMetrics{
 			Path:         "/v1/chat/completions",
 			Model:        model,
@@ -1957,13 +1968,13 @@ func (h *Handler) handleOpenAINonStream(w http.ResponseWriter, account *config.A
 		},
 		OnToolUse:  func(tu KiroToolUse) { toolUses = append(toolUses, tu) },
 		OnComplete: func(inTok, outTok int) { inputTokens = inTok; outputTokens = outTok },
-		OnError:    func(err error) { h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429")) },
+		OnError:    func(err error) { h.recordAccountError(account.ID, err) },
 		OnCredits:  func(c float64) { credits = c },
 	}
 
 	err := CallKiroAPI(account, payload, callback)
 	if err != nil {
-		h.pool.RecordError(account.ID, strings.Contains(err.Error(), "429"))
+		h.recordAccountError(account.ID, err)
 		h.sendOpenAIError(w, 500, "server_error", err.Error())
 		h.finalizeRequest(RequestFinalMetrics{
 			Path:         "/v1/chat/completions",
