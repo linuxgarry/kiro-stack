@@ -4,15 +4,8 @@ package pool
 
 import (
 	"kiro-api-proxy/config"
-	"math/rand"
-	"sort"
 	"sync"
 	"time"
-)
-
-const (
-	primaryUsageThreshold = 10
-	topCandidateLimit     = 3
 )
 
 type breakerEvent struct {
@@ -61,6 +54,7 @@ type AccountPool struct {
 	cooldowns     map[string]time.Time // 账号冷却时间
 	errorCounts   map[string]int       // 连续错误计数
 	breakerStates map[string]*breakerRuntimeState
+	weightCurrent map[string]int
 }
 
 var (
@@ -75,6 +69,7 @@ func GetPool() *AccountPool {
 			cooldowns:     make(map[string]time.Time),
 			errorCounts:   make(map[string]int),
 			breakerStates: make(map[string]*breakerRuntimeState),
+			weightCurrent: make(map[string]int),
 		}
 		pool.Reload()
 	})
@@ -95,9 +90,14 @@ func (p *AccountPool) Reload() {
 			delete(p.breakerStates, id)
 		}
 	}
+	for id := range p.weightCurrent {
+		if !known[id] {
+			delete(p.weightCurrent, id)
+		}
+	}
 }
 
-// GetNext 获取一个可用账号：主池/兜底池 +（排序优先后的）组内加权随机
+// GetNext 获取一个可用账号：在可用账号中按权重做平滑轮询。
 func (p *AccountPool) GetNext() *config.Account {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -108,8 +108,7 @@ func (p *AccountPool) GetNext() *config.Account {
 
 	now := time.Now()
 	breakerCfg := config.GetCircuitBreakerConfig()
-	primary := make([]*config.Account, 0, len(p.accounts))
-	fallback := make([]*config.Account, 0, len(p.accounts))
+	candidates := make([]*config.Account, 0, len(p.accounts))
 
 	for i := range p.accounts {
 		acc := &p.accounts[i]
@@ -128,17 +127,10 @@ func (p *AccountPool) GetNext() *config.Account {
 			continue
 		}
 
-		if acc.UsageCurrent >= primaryUsageThreshold {
-			primary = append(primary, acc)
-		} else {
-			fallback = append(fallback, acc)
-		}
+		candidates = append(candidates, acc)
 	}
 
-	picked := pickWeightedWithRanking(primary)
-	if picked == nil {
-		picked = pickWeightedWithRanking(fallback)
-	}
+	picked := p.pickSmoothWeightedLocked(candidates)
 	if picked != nil {
 		return picked
 	}
@@ -163,51 +155,33 @@ func (p *AccountPool) GetNext() *config.Account {
 	return best
 }
 
-func pickWeightedWithRanking(candidates []*config.Account) *config.Account {
+func (p *AccountPool) pickSmoothWeightedLocked(candidates []*config.Account) *config.Account {
 	if len(candidates) == 0 {
 		return nil
 	}
-
-	// 先按积分(usageCurrent) / 更新时间(lastRefresh)排序
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].UsageCurrent == candidates[j].UsageCurrent {
-			return candidates[i].LastRefresh > candidates[j].LastRefresh
-		}
-		return candidates[i].UsageCurrent > candidates[j].UsageCurrent
-	})
-
-	// 只在前N个候选里按权重随机，兼顾“优先”与“分流”
-	limit := topCandidateLimit
-	if len(candidates) < limit {
-		limit = len(candidates)
-	}
-	top := candidates[:limit]
-
 	totalWeight := 0
-	for _, a := range top {
+	var best *config.Account
+	bestScore := 0
+
+	for _, a := range candidates {
 		w := a.Weight
 		if w <= 0 {
 			w = 100
 		}
 		totalWeight += w
-	}
 
-	if totalWeight <= 0 {
-		return top[rand.Intn(len(top))]
-	}
-
-	r := rand.Intn(totalWeight)
-	for _, a := range top {
-		w := a.Weight
-		if w <= 0 {
-			w = 100
-		}
-		r -= w
-		if r < 0 {
-			return a
+		score := p.weightCurrent[a.ID] + w
+		p.weightCurrent[a.ID] = score
+		if best == nil || score > bestScore {
+			best = a
+			bestScore = score
 		}
 	}
-	return top[len(top)-1]
+
+	if best != nil {
+		p.weightCurrent[best.ID] -= totalWeight
+	}
+	return best
 }
 
 // GetByID 根据 ID 获取账号

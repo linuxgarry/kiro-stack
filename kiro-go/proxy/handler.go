@@ -9,7 +9,6 @@ import (
 	"kiro-api-proxy/clash"
 	"kiro-api-proxy/config"
 	"kiro-api-proxy/pool"
-	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -144,6 +143,8 @@ type Handler struct {
 	gatewayProxy    *httputil.ReverseProxy
 	modelFallbackMu sync.Mutex
 	modelFallbacks  map[string]time.Time
+	gatewayWeightMu sync.Mutex
+	gatewayWeights  map[string]int
 }
 
 func NewHandler() *Handler {
@@ -164,6 +165,7 @@ func NewHandler() *Handler {
 		gatewayBase:           strings.TrimRight(os.Getenv("KIRO_GATEWAY_BASE"), "/"),
 		gatewayAPIKey:         os.Getenv("KIRO_GATEWAY_API_KEY"),
 		modelFallbacks:        make(map[string]time.Time),
+		gatewayWeights:        make(map[string]int),
 	}
 	if h.gatewayBase != "" {
 		if u, err := url.Parse(h.gatewayBase); err == nil {
@@ -294,36 +296,49 @@ func (h *Handler) selectGatewayAccountWithTried(tried map[string]bool) *config.A
 		return nil
 	}
 
-	// 优先 + 可降级：永远先试最高权重组，失败后在下一轮降级到次高权重组
-	maxWeight := 0
-	for i := range candidates {
-		w := candidates[i].Weight
-		if w <= 0 {
-			w = 100
-		}
-		if w > maxWeight {
-			maxWeight = w
-		}
-	}
-	if maxWeight <= 0 {
-		maxWeight = 100
+	return h.pickSmoothWeightedGateway(candidates)
+}
+
+func (h *Handler) pickSmoothWeightedGateway(candidates []config.Account) *config.Account {
+	if len(candidates) == 0 {
+		return nil
 	}
 
-	top := make([]config.Account, 0, len(candidates))
+	h.gatewayWeightMu.Lock()
+	defer h.gatewayWeightMu.Unlock()
+
+	known := make(map[string]bool, len(candidates))
+	totalWeight := 0
+	bestIdx := -1
+	bestScore := 0
+
 	for i := range candidates {
+		known[candidates[i].ID] = true
 		w := candidates[i].Weight
 		if w <= 0 {
 			w = 100
 		}
-		if w == maxWeight {
-			top = append(top, candidates[i])
+		totalWeight += w
+
+		score := h.gatewayWeights[candidates[i].ID] + w
+		h.gatewayWeights[candidates[i].ID] = score
+		if bestIdx == -1 || score > bestScore {
+			bestIdx = i
+			bestScore = score
 		}
 	}
-	if len(top) == 0 {
-		chosen := candidates[rand.Intn(len(candidates))]
-		return &chosen
+
+	for id := range h.gatewayWeights {
+		if !known[id] {
+			delete(h.gatewayWeights, id)
+		}
 	}
-	chosen := top[rand.Intn(len(top))]
+
+	if bestIdx < 0 {
+		return nil
+	}
+	chosen := candidates[bestIdx]
+	h.gatewayWeights[chosen.ID] -= totalWeight
 	return &chosen
 }
 
@@ -344,42 +359,7 @@ func (h *Handler) buildGatewayPools(accounts []config.Account) ([]config.Account
 }
 
 func (h *Handler) pickWeightedGateway(candidates []config.Account) *config.Account {
-	if len(candidates) == 0 {
-		return nil
-	}
-
-	// 严格优先：仅从最高权重组里选择（同权重再随机）
-	maxWeight := 0
-	for i := range candidates {
-		w := candidates[i].Weight
-		if w <= 0 {
-			w = 100
-		}
-		if w > maxWeight {
-			maxWeight = w
-		}
-	}
-	if maxWeight <= 0 {
-		maxWeight = 100
-	}
-
-	top := make([]config.Account, 0, len(candidates))
-	for i := range candidates {
-		w := candidates[i].Weight
-		if w <= 0 {
-			w = 100
-		}
-		if w == maxWeight {
-			top = append(top, candidates[i])
-		}
-	}
-	if len(top) == 0 {
-		chosen := candidates[rand.Intn(len(candidates))]
-		return &chosen
-	}
-
-	chosen := top[rand.Intn(len(top))]
-	return &chosen
+	return h.pickSmoothWeightedGateway(candidates)
 }
 
 func (h *Handler) proxyToGatewayWithAccount(w http.ResponseWriter, r *http.Request, account *config.Account) {
