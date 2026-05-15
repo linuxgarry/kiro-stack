@@ -11,6 +11,7 @@ import (
 	"kiro-api-proxy/config"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -53,11 +54,64 @@ var kiroHttpClient = &http.Client{
 	},
 }
 
+var (
+	kiroModelFallbackMu sync.Mutex
+	kiroModelFallbacks  = map[string]time.Time{}
+)
+
 func pickKiroStreamClient(proxyURL string) *http.Client {
 	if proxyURL == "" {
 		return kiroHttpClient
 	}
 	return config.GetKiroStreamHTTPClient(proxyURL)
+}
+
+func kiroPayloadModel(payload *KiroPayload) string {
+	if payload == nil {
+		return ""
+	}
+	return payload.ConversationState.CurrentMessage.UserInputMessage.ModelID
+}
+
+func setKiroPayloadModel(payload *KiroPayload, model string) {
+	if payload == nil || model == "" {
+		return
+	}
+	payload.ConversationState.CurrentMessage.UserInputMessage.ModelID = model
+	for i := range payload.ConversationState.History {
+		if payload.ConversationState.History[i].UserInputMessage != nil {
+			payload.ConversationState.History[i].UserInputMessage.ModelID = model
+		}
+	}
+}
+
+func markKiroModelFallback(model string) {
+	if model == "" || model == gatewayModelFallbackID {
+		return
+	}
+	until := time.Now().Add(gatewayModelFallbackCooldown)
+	kiroModelFallbackMu.Lock()
+	kiroModelFallbacks[model] = until
+	kiroModelFallbackMu.Unlock()
+	fmt.Printf("[KiroAPI] model %s rejected, fallback to %s until %s\n", model, gatewayModelFallbackID, until.Format(time.RFC3339))
+}
+
+func kiroModelForRequest(model string) string {
+	if model == "" || model == gatewayModelFallbackID {
+		return model
+	}
+	now := time.Now()
+	kiroModelFallbackMu.Lock()
+	defer kiroModelFallbackMu.Unlock()
+	until, ok := kiroModelFallbacks[model]
+	if !ok {
+		return model
+	}
+	if now.After(until) {
+		delete(kiroModelFallbacks, model)
+		return model
+	}
+	return gatewayModelFallbackID
 }
 
 // ==================== 请求结构 ====================
@@ -167,6 +221,12 @@ func getSortedEndpoints(preferred string) []kiroEndpoint {
 
 // CallKiroAPI 调用 Kiro API（流式），双端点自动 fallback
 func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroStreamCallback) error {
+	targetModel := kiroPayloadModel(payload)
+	activeModel := kiroModelForRequest(targetModel)
+	if activeModel != "" && activeModel != targetModel {
+		setKiroPayloadModel(payload, activeModel)
+	}
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -190,57 +250,67 @@ func CallKiroAPI(account *config.Account, payload *KiroPayload, callback *KiroSt
 	endpoints := getSortedEndpoints(config.GetPreferredEndpoint())
 
 	var lastErr error
-	for _, ep := range endpoints {
-		// 更新 payload 中的 origin
-		payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
+modelRetryLoop:
+	for modelRetry := 0; modelRetry < 2; modelRetry++ {
+		for _, ep := range endpoints {
+			// 更新 payload 中的 origin
+			payload.ConversationState.CurrentMessage.UserInputMessage.Origin = ep.Origin
 
-		reqBody, _ := json.Marshal(payload)
-		req, err := http.NewRequest("POST", ep.URL, bytes.NewReader(reqBody))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "*/*")
-		req.Header.Set("X-Amz-Target", ep.AmzTarget)
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("X-Amz-User-Agent", amzUserAgent)
-		req.Header.Set("x-amzn-kiro-agent-mode", "spec")
-		req.Header.Set("x-amzn-codewhisperer-optout", "true")
-		req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
-		req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
-		req.Header.Set("Authorization", "Bearer "+account.AccessToken)
-
-		resp, err := clash.PickAccountStreamClient(account).Do(req)
-		if err != nil {
-			lastErr = err
-			fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)
-			continue
-		}
-
-		if resp.StatusCode == 429 {
-			resp.Body.Close()
-			fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...\n", ep.Name)
-			lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
-			continue
-		}
-
-		if resp.StatusCode != 200 {
-			errBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
-			// 认证错误不继续尝试
-			if resp.StatusCode == 401 || resp.StatusCode == 403 {
-				return lastErr
+			reqBody, _ := json.Marshal(payload)
+			req, err := http.NewRequest("POST", ep.URL, bytes.NewReader(reqBody))
+			if err != nil {
+				lastErr = err
+				continue
 			}
-			fmt.Printf("[KiroAPI] Endpoint %s error: %v\n", ep.Name, lastErr)
-			continue
-		}
 
-		err = parseEventStream(resp.Body, callback, estimatedInputTokens)
-		resp.Body.Close()
-		return err
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "*/*")
+			req.Header.Set("X-Amz-Target", ep.AmzTarget)
+			req.Header.Set("User-Agent", userAgent)
+			req.Header.Set("X-Amz-User-Agent", amzUserAgent)
+			req.Header.Set("x-amzn-kiro-agent-mode", "spec")
+			req.Header.Set("x-amzn-codewhisperer-optout", "true")
+			req.Header.Set("Amz-Sdk-Request", "attempt=1; max=3")
+			req.Header.Set("Amz-Sdk-Invocation-Id", uuid.New().String())
+			req.Header.Set("Authorization", "Bearer "+account.AccessToken)
+
+			resp, err := clash.PickAccountStreamClient(account).Do(req)
+			if err != nil {
+				lastErr = err
+				fmt.Printf("[KiroAPI] Endpoint %s failed: %v\n", ep.Name, err)
+				continue
+			}
+
+			if resp.StatusCode == 429 {
+				resp.Body.Close()
+				fmt.Printf("[KiroAPI] Endpoint %s quota exhausted (429), trying next...\n", ep.Name)
+				lastErr = fmt.Errorf("quota exhausted on %s", ep.Name)
+				continue
+			}
+
+			if resp.StatusCode != 200 {
+				errBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, ep.Name, string(errBody))
+				if isGatewayInvalidModelResponse(resp.StatusCode, errBody) && activeModel == targetModel {
+					markKiroModelFallback(targetModel)
+					activeModel = gatewayModelFallbackID
+					setKiroPayloadModel(payload, activeModel)
+					continue modelRetryLoop
+				}
+				// 认证错误不继续尝试
+				if resp.StatusCode == 401 || resp.StatusCode == 403 {
+					return lastErr
+				}
+				fmt.Printf("[KiroAPI] Endpoint %s error: %v\n", ep.Name, lastErr)
+				continue
+			}
+
+			err = parseEventStream(resp.Body, callback, estimatedInputTokens)
+			resp.Body.Close()
+			return err
+		}
+		break
 	}
 
 	if lastErr != nil {

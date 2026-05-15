@@ -45,6 +45,7 @@ type RequestLogAttempt struct {
 	Try        int    `json:"try"`
 	AccountID  string `json:"accountId,omitempty"`
 	Email      string `json:"email,omitempty"`
+	Model      string `json:"model,omitempty"`
 	StatusCode int    `json:"statusCode"`
 	Error      string `json:"error,omitempty"`
 	DurationMs int64  `json:"durationMs"`
@@ -141,6 +142,8 @@ type Handler struct {
 	gatewayBase     string
 	gatewayAPIKey   string
 	gatewayProxy    *httputil.ReverseProxy
+	modelFallbackMu sync.Mutex
+	modelFallbacks  map[string]time.Time
 }
 
 func NewHandler() *Handler {
@@ -160,6 +163,7 @@ func NewHandler() *Handler {
 		requestLogs:           newRequestLogRing(500),
 		gatewayBase:           strings.TrimRight(os.Getenv("KIRO_GATEWAY_BASE"), "/"),
 		gatewayAPIKey:         os.Getenv("KIRO_GATEWAY_API_KEY"),
+		modelFallbacks:        make(map[string]time.Time),
 	}
 	if h.gatewayBase != "" {
 		if u, err := url.Parse(h.gatewayBase); err == nil {
@@ -395,6 +399,68 @@ func (h *Handler) proxyToGatewayWithAccount(w http.ResponseWriter, r *http.Reque
 	h.gatewayProxy.ServeHTTP(w, r)
 }
 
+const (
+	gatewayModelFallbackID       = "claude-sonnet-4.5"
+	gatewayModelFallbackCooldown = 2 * time.Minute
+)
+
+func isGatewayInvalidModelResponse(status int, body []byte) bool {
+	if status != http.StatusBadRequest || len(body) == 0 {
+		return false
+	}
+	msg := strings.ToLower(string(body))
+	return strings.Contains(msg, "invalid_model_id") || strings.Contains(msg, "invalid model")
+}
+
+func rewriteRequestModel(body []byte, model string) ([]byte, bool) {
+	if len(body) == 0 || model == "" {
+		return body, false
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return body, false
+	}
+	current, _ := obj["model"].(string)
+	if current == model {
+		return body, false
+	}
+	obj["model"] = model
+	rewritten, err := json.Marshal(obj)
+	if err != nil {
+		return body, false
+	}
+	return rewritten, true
+}
+
+func (h *Handler) markGatewayModelFallback(model string) {
+	if model == "" || model == gatewayModelFallbackID {
+		return
+	}
+	until := time.Now().Add(gatewayModelFallbackCooldown)
+	h.modelFallbackMu.Lock()
+	h.modelFallbacks[model] = until
+	h.modelFallbackMu.Unlock()
+	fmt.Printf("[GatewayProxy] model %s rejected, fallback to %s until %s\n", model, gatewayModelFallbackID, until.Format(time.RFC3339))
+}
+
+func (h *Handler) gatewayModelForRequest(model string) string {
+	if model == "" || model == gatewayModelFallbackID {
+		return model
+	}
+	now := time.Now()
+	h.modelFallbackMu.Lock()
+	defer h.modelFallbackMu.Unlock()
+	until, ok := h.modelFallbacks[model]
+	if !ok {
+		return model
+	}
+	if now.After(until) {
+		delete(h.modelFallbacks, model)
+		return model
+	}
+	return gatewayModelFallbackID
+}
+
 func (h *Handler) proxyWithFailover(w http.ResponseWriter, r *http.Request) {
 	if h.gatewayProxy == nil {
 		http.Error(w, "gateway proxy not configured", 500)
@@ -405,6 +471,13 @@ func (h *Handler) proxyWithFailover(w http.ResponseWriter, r *http.Request) {
 	bodyBytes, _ := io.ReadAll(r.Body)
 	r.Body.Close()
 	model := extractModelFromRequestBody(bodyBytes)
+	activeModel := h.gatewayModelForRequest(model)
+	activeBody := bodyBytes
+	if activeModel != "" && activeModel != model {
+		if rewritten, ok := rewriteRequestModel(bodyBytes, activeModel); ok {
+			activeBody = rewritten
+		}
+	}
 
 	maxAttempts := 4
 	if r.URL.Path == "/v1/models" || r.Method == http.MethodGet {
@@ -434,11 +507,11 @@ func (h *Handler) proxyWithFailover(w http.ResponseWriter, r *http.Request) {
 		lastEmail = acc.Email
 
 		cloneReq := r.Clone(r.Context())
-		cloneReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-		cloneReq.ContentLength = int64(len(bodyBytes))
-		if len(bodyBytes) > 0 {
+		cloneReq.Body = io.NopCloser(bytes.NewReader(activeBody))
+		cloneReq.ContentLength = int64(len(activeBody))
+		if len(activeBody) > 0 {
 			cloneReq.GetBody = func() (io.ReadCloser, error) {
-				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				return io.NopCloser(bytes.NewReader(activeBody)), nil
 			}
 		}
 
@@ -462,10 +535,20 @@ func (h *Handler) proxyWithFailover(w http.ResponseWriter, r *http.Request) {
 			Try:        len(attemptItems) + 1,
 			AccountID:  acc.ID,
 			Email:      acc.Email,
+			Model:      activeModel,
 			StatusCode: resp.StatusCode,
 			DurationMs: time.Since(tryStart).Milliseconds(),
 			Error:      truncateError(lastError),
 		})
+
+		if isGatewayInvalidModelResponse(resp.StatusCode, respBody) && activeModel == model {
+			h.markGatewayModelFallback(model)
+			if rewritten, ok := rewriteRequestModel(bodyBytes, gatewayModelFallbackID); ok {
+				activeModel = gatewayModelFallbackID
+				activeBody = rewritten
+				continue
+			}
+		}
 
 		// success
 		if resp.StatusCode >= 200 && resp.StatusCode < 400 {

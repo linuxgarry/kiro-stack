@@ -511,7 +511,7 @@ Embeds the **Clash.Meta (mihomo) core as a Go library** so a single `kiro-go` co
 
 5. **响应式 3 列账号网格** — 账号卡片从「一行一个」改成 `grid-template-columns: repeat(auto-fill, minmax(360px, 1fr))`，桌面端能看到 3-4 个账号，800px 以下回退到单列。每张卡也精简了一遍：进度条和到期时间合并、状态条合并到 footer 一行。
 
-6. **模型映射** — 设置页可以编辑「入站 model 名 → 上游 Kiro model 名」映射表（默认空表 = 透传，与上游行为一致）。⚠️ 截至本次提交，运行时映射在 `INVALID_MODEL_ID` 这条路径上还没完全生效，PR 欢迎；写盘 / API / UI 均已完成。
+6. **模型映射 + 无效模型自动降级** — 设置页可以编辑「入站 model 名 → 上游 Kiro model 名」映射表（默认空表 = 透传，与上游行为一致）。当 gateway 或 Kiro API 返回 `INVALID_MODEL_ID` / `Invalid model` 时，`kiro-go` 会把该目标模型临时降级到 `claude-sonnet-4.5`，2 分钟冷却后自动恢复尝试原目标模型；如果再次失败，会继续进入下一轮 2 分钟冷却。
 
 7. **`/v1/messages` 兼容性副作用：账号代理（v1）继续可用**，并且现在会按「Clash 节点 → proxyUrl → 直连」的顺序解析。
 
@@ -552,6 +552,7 @@ Embeds the **Clash.Meta (mihomo) core as a Go library** so a single `kiro-go` co
 ### 兼容性 / Compatibility
 
 - **完全向后兼容**：旧 `config.json` 里没有 `proxyNode` / `clashSubscriptionUrl` / `globalOutboundProxy` / `modelMapping` 时全部当空处理，行为与上游一致。
+- 无效模型降级只保存在进程内存里，不写入 `config.json`；服务重启后会重新先试目标模型。
 - 镜像体积：~10MB → ~37MB（mihomo 内核 + 加密库）；常驻内存增加约 5MB。
 - 第一次构建会拉一堆 Go 模块，时间 3-5 分钟；之后被 Docker layer 缓存后秒级。
 
